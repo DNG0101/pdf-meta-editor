@@ -56,7 +56,7 @@ test("WAV LIST INFO removal while preserving audio bytes",()=>{
 });
 test("MP3 ID3v2 and ID3v1 removal",()=>{
  const tag=cat(ascii("TAG"),new Uint8Array(125));
- const audio=u([255,251,8,9]);
+ const audio=u([255,251,144,0]);
  const mp3=cat(ascii("ID3"),u([4,0,0,0,0,0,0]),audio,tag);
  const c=E.binary(mp3,true);
  assert.equal(c.count,2);assert.deepEqual([...c.bytes],[...audio]);
