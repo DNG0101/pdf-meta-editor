@@ -89,22 +89,55 @@ function jpeg(a,strip){
 const crcTable=Array.from({length:256},(_,n)=>{for(let k=0;k<8;k++)n=n&1?0xedb88320^(n>>>1):n>>>1;return n>>>0;});
 function crc32(bytes){let crc=0xffffffff;for(let i=0;i<bytes.length;i++)crc=crcTable[(crc^bytes[i])&255]^(crc>>>8);return (crc^0xffffffff)>>>0;}
 function png(a,strip){
- let p=8,count=0,removed=[],parts=[a.subarray(0,8)],endSeen=false;
+ // Mandatory PNG layout is validated before allowing metadata removal.
+ // CRC checking alone is insufficient: a syntactically valid chunk list
+ // without IHDR/IDAT would previously have been treated as a clean PNG.
+ if(a.length<45)throw Error("Truncated PNG image");
+ let p=8,count=0,removed=[],parts=[a.subarray(0,8)],ihdr=false,idat=false,afterIDAT=false,ended=false,plte=false,chunkCount=0,colorType=-1;
  const drop=new Set(["tEXt","zTXt","iTXt","eXIf","tIME"]);
  while(p<a.length){
+  if(++chunkCount>200000)throw Error("Excessive PNG chunk count");
   if(p+12>a.length)throw Error("Truncated PNG chunk");
-  const len=be32(a,p),type=decode(a,p+4,4),end=p+12+len;
+  const len=be32(a,p),type=decode(a,p+4,4);
   if(len>a.length-p-12)throw Error("Invalid PNG chunk length");
-  if(crc32(a.subarray(p+4,p+8+len))!==be32(a,p+8+len))throw Error("PNG chunk CRC mismatch; refusing to process damaged file");
+  const end=p+12+len;
+  if(!/^[A-Za-z]{4}$/.test(type))throw Error("Invalid PNG chunk type");
+  if(crc32(a.subarray(p+4,p+8+len))!==be32(a,p+8+len))throw Error("PNG chunk CRC mismatch; refusing damaged file");
+  if(!ihdr){
+   if(type!=="IHDR"||len!==13||p!==8)throw Error("PNG must start with a 13-byte IHDR chunk");
+   const width=be32(a,p+8),height=be32(a,p+12),bitDepth=a[p+16],compression=a[p+18],filter=a[p+19],interlace=a[p+20];
+   colorType=a[p+17];
+   const allowed={0:[1,2,4,8,16],2:[8,16],3:[1,2,4,8],4:[8,16],6:[8,16]};
+   if(!width||!height||!allowed[colorType]?.includes(bitDepth)||compression!==0||filter!==0||interlace>1)
+    throw Error("Invalid PNG IHDR dimensions or encoding properties");
+   ihdr=true;
+  }else if(type==="IHDR")throw Error("Duplicate PNG IHDR");
+  if(type==="PLTE"){
+   if(plte||idat||!len||len%3||len>768||colorType===0||colorType===4)throw Error("Invalid PNG palette chunk");
+   plte=true;
+  }
+  if(type==="IDAT"){
+   if(afterIDAT)throw Error("PNG IDAT chunks must be consecutive");
+   idat=true;
+  }else if(idat)afterIDAT=true;
+  if(type==="IEND"){
+   if(len!==0||!idat||(colorType===3&&!plte)||end!==a.length)throw Error("Invalid PNG IEND, missing IDAT/palette or trailing data");
+   ended=true;
+  }
+  if(type==="tRNS"&&idat)throw Error("PNG transparency must precede IDAT");
+  // Reject unknown critical chunks: rewrite safety cannot be established.
+  if(type[0]===type[0].toUpperCase()&&!["IHDR","PLTE","IDAT","IEND"].includes(type))
+   throw Error("Unrecognized critical PNG chunk "+type+"; refusing metadata rewrite");
   const isMeta=drop.has(type);
-   if(strip&&type==="eXIf"&&guardedExifOrientation(a.subarray(p+8,p+8+len))!==1)throw Error("PNG EXIF orientation is not 1; refusing appearance-changing metadata removal");
-   if(isMeta){count++;if(strip)removed.push(type);}
+  if(strip&&type==="eXIf"&&guardedExifOrientation(a.subarray(p+8,p+8+len))!==1)
+   throw Error("PNG EXIF orientation is not 1; refusing appearance-changing metadata removal");
+  if(isMeta){count++;if(strip)removed.push(type);}
   if(!strip||!isMeta)parts.push(a.subarray(p,end));
   p=end;
-  if(type==="IEND"){endSeen=true;if(p!==a.length)throw Error("Trailing data after PNG IEND requires manual review");break;}
+  if(ended)break;
  }
- if(!endSeen)throw Error("Missing PNG IEND");
- return {count,removed,bytes:strip?concat(parts):a,notes:["Image pixels, ICC profiles, color management chunks and unknown ancillary chunks are preserved; invisible watermarks are not verified."]};
+ if(!ended)throw Error("PNG missing IEND");
+ return {count,removed,bytes:strip?concat(parts):a,notes:["Known PNG text/EXIF/time chunks handled; ancillary color profiles, unknown metadata and embedded watermarks are not verified."]};
 }
 function asciiExif(a){return decode(a,0,6)==="Exif\0\0"?a.subarray(6):a;}
 function webp(a,strip){
