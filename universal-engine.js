@@ -8,6 +8,12 @@ const be32=(a,p)=>((a[p]*0x1000000)+(a[p+1]<<16)+(a[p+2]<<8)+a[p+3])>>>0;
 const put32=(a,p,n)=>(a[p]=n&255,a[p+1]=(n>>>8)&255,a[p+2]=(n>>>16)&255,a[p+3]=(n>>>24)&255);
 const concat=parts=>{const out=new Uint8Array(parts.reduce((n,p)=>n+p.length,0));let j=0;for(const p of parts){out.set(p,j);j+=p.length;}return out;};
 const eq=(a,b)=>a.length===b.length&&a.every((v,i)=>v===b[i]);
+function validMpegAudioFrame(a,p=0){
+ if(p<0||a.length-p<4||a[p]!==255||(a[p+1]&0xe0)!==0xe0)return false;
+ const version=(a[p+1]>>3)&3,layer=(a[p+1]>>1)&3,rate=(a[p+2]>>4)&15,sample=(a[p+2]>>2)&3;
+ // Free-format and reserved headers require additional decoding; fail closed.
+ return version!==1&&layer!==0&&rate!==0&&rate!==15&&sample!==3;
+}
 function identify(a,name=""){
  if(a.length>=5&&decode(a,0,5)==="%PDF-")return "pdf";
  if(a.length>=8&&eq(a.slice(0,8),new Uint8Array([137,80,78,71,13,10,26,10])))return "png";
@@ -15,7 +21,7 @@ function identify(a,name=""){
  if(a.length>=12&&decode(a,0,4)==="RIFF"&&decode(a,8,4)==="WEBP")return "webp";
  if(a.length>=12&&decode(a,0,4)==="RIFF"&&decode(a,8,4)==="WAVE")return "wav";
  if(a.length>=3&&decode(a,0,3)==="ID3")return "mp3";
- if(a.length>=2&&a[0]===255&&(a[1]&0xe0)===0xe0)return "mp3";
+ if(validMpegAudioFrame(a))return "mp3";
  if(a.length>=4&&decode(a,0,2)==="PK"&&(a[2]===3||a[2]===5||a[2]===7)&&[4,6,8].includes(a[3]))return "zip";
  return "unknown";
 }
@@ -166,6 +172,7 @@ function webp(a,strip){
 function mp3(a,strip){
  let begin=0,end=a.length,count=0,removed=[];
  if(decode(a,0,3)==="ID3"){
+  if(![2,3,4].includes(a[3])||a[4]!==0)throw Error("Unsupported ID3 version");
   if(a.length<10||[6,7,8,9].some(i=>a[i]>127))throw Error("Invalid ID3v2 header");
   const size=(a[6]<<21)|(a[7]<<14)|(a[8]<<7)|a[9];
   begin=10+size+((a[5]&0x10)?10:0);if(begin>a.length)throw Error("Invalid ID3v2 size");
@@ -173,6 +180,7 @@ function mp3(a,strip){
  }
  if(end-begin>=128&&decode(a,end-128,3)==="TAG"){end-=128;count++;if(strip)removed.push("ID3v1");}
  if(begin>=end)throw Error("No MP3 audio payload after tags");
+ if(!validMpegAudioFrame(a,begin))throw Error("No supported MPEG audio frame header after tags; refusing unsafe MP3 processing");
  if(a.length>=32&&(decode(a,a.length-32,8)==="APETAGEX"||(end>=32&&decode(a,end-32,8)==="APETAGEX")))throw Error("APEv2 tag detected; removal is not implemented safely");
  return {count,removed,bytes:strip?a.slice(begin,end):a,notes:["Other MP3 tag formats or in-stream identifiers may remain."]};
 }
