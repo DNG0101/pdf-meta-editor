@@ -514,7 +514,7 @@ async function buildSections(file, buf) {
 function renderResults(fileName, sections) {
   document.getElementById("result-filename").textContent = fileName;
   document.getElementById("result-subtitle").textContent =
-    `${sections.length} categories · All fields are editable · Fields marked ✦ are written into the downloaded PDF`;
+    `${sections.length} categories · Only ✦ fields are editable and included in exported PDF`;
 
   const container = document.getElementById("sections-container");
   container.innerHTML = "";
@@ -568,6 +568,8 @@ function renderResults(fileName, sections) {
       if (f.type === "textarea") {
         const ta = document.createElement("textarea");
         ta.className = "field-textarea";
+        ta.readOnly = !f.pdfWritable;
+        if (ta.readOnly) { ta.title = "Inspection only; not writable to PDF"; ta.setAttribute("aria-readonly", "true"); }
         ta.value = f.value ?? "";
         ta.placeholder = `Enter ${f.label.toLowerCase()}…`;
         ta.addEventListener("input", () => onFieldEdit(f.key, ta.value));
@@ -576,6 +578,8 @@ function renderResults(fileName, sections) {
         const inp = document.createElement("input");
         inp.type = "text";
         inp.className = "field-input";
+        inp.readOnly = !f.pdfWritable;
+        if (inp.readOnly) { inp.title = "Inspection only; not writable to PDF"; inp.setAttribute("aria-readonly", "true"); }
         inp.value = f.value ?? "";
         inp.placeholder = `Enter ${f.label.toLowerCase()}…`;
         inp.addEventListener("input", () => onFieldEdit(f.key, inp.value));
@@ -644,7 +648,7 @@ async function downloadPdf() {
     const t = pick("title");   if (t !== null) pdfDoc.setTitle(t);
     const a = pick("author");  if (a !== null) pdfDoc.setAuthor(a);
     const s = pick("subject"); if (s !== null) pdfDoc.setSubject(s);
-    const k = pick("keywords");if (k !== null) pdfDoc.setKeywords([k]);
+    const k = pick("keywords");if (k !== null) pdfDoc.setKeywords(k.split(/[,;\n]+/).map(v => v.trim()).filter(Boolean));
     const c = pick("creator"); if (c !== null) pdfDoc.setCreator(c);
     const p = pick("producer");if (p !== null) pdfDoc.setProducer(p);
     const cd = pick("creationDate");
