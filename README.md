@@ -4,7 +4,7 @@ Local-first, GitHub Pages compatible file metadata analysis and conservative rem
 
 ## Modes
 
-- **All files:** inspect local files, detect format signatures, remove known metadata where supported, verify output by reinspection, batch-clean files, and export JSON reports.
+- **All files:** inspect local files, detect format signatures, **show parsed field names, actual values and sources** where supported, remove known metadata where supported, verify output by reinspection, batch-clean files, and export JSON reports.
 - **Advanced PDF:** detailed inspection and editing of the eight supported writable Info fields (Title, Author, Subject, Keywords, Creator, Producer, CreationDate and ModDate). Other values are read-only.
 
 ## Format-specific cleanup
@@ -24,6 +24,25 @@ Local-first, GitHub Pages compatible file metadata analysis and conservative rem
 | Unknown formats and generic ZIP | None | Inspection-only, never falsely claim to be cleaned |
 
 Formats are detected using file magic and relevant package structure, not filenames alone.
+
+## Field-level inspection and verification
+
+The universal interface now lists parsed field names, values and source containers per file, not just metadata-block counts. Its inspection coverage is **explicitly partial** and may not include every identifier in a file. Examples of fields available:
+
+- JPEG EXIF/TIFF: maker, camera model, orientation, timestamp, artist, GPS tag values and selected other TIFF tags; XMP preview and ICC/IPTC presence.
+- PNG: image dimensions and depth, tEXt, uncompressed iTXt, modification time, supported eXIf fields and ICC presence. Compressed zTXt/iTXt is reported as present but not decoded.
+- WebP: selected EXIF fields, XMP preview and ICC presence.
+- MP3: common ID3v2.3/v2.4 text frames, attached-image presence and ID3v1 values. Other ID3 features may not be decoded.
+- WAV: LIST/INFO values, channels, sample rate and recognized metadata-chunk presence.
+- FLAC: Vorbis comment values, encoder and picture/application-block presence.
+- GIF: comment text and recognized XMP application-block presence.
+- PDF: page count, Info dictionary getters and catalog XMP presence; nested XMP, revisions and embedded identifiers remain out of scope.
+- DOCX/XLSX/PPTX: recognized `docProps` XML leaf field values using guarded ZIP decompression. Comments/revisions/embedded objects remain out of scope.
+- Other formats: identification only unless an explicit parser supports more fields; **no indication of an empty metadata field list implies no metadata exists**.
+
+After cleaning, the app checks that known removable blocks are absent, reports remaining parsed fields, and cross-checks selected structural fields. This is not a full decode/render comparison or a general content-integrity certificate. EXIF orientation values other than 1 are conservatively **refused for metadata stripping** rather than quietly changing how the image displays.
+
+The browser workbench currently requires some CDN dependencies, must handle file limits, and does not claim universal format compatibility. All parsing takes place on the selected local bytes.
 
 ## Important: SynthID and invisible watermarks
 
@@ -48,6 +67,6 @@ Serve this directory over HTTP (for example: python3 -m http.server 8080), then 
 
 Node.js 22+ commands: npm install; npm run verify.
 
-Verification includes JPEG/PNG/WebP/MP3/WAV/GIF/FLAC byte-structure fixtures, PDF and Office reinspection, malicious ZIP resource bounds and browser UI smoke checks. Test success is not universal compatibility certification.
+Verification includes JPEG/PNG/WebP/MP3/WAV/GIF/FLAC byte-structure fixtures, PDF and Office reinspection, malicious ZIP resource bounds, field extraction/cleaning round trips, display-orientation refusal and a browser DOM test asserting that metadata values display safely. Test success is not universal compatibility certification.
 
 Each new file format must be implemented with a real parser, a format-specific cleaner, and a post-clean validation step. Never blindly replace byte sequences in arbitrary files.
