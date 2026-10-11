@@ -1,5 +1,7 @@
 "use strict";
 const assert=require("node:assert/strict");
+global.FileMetaZipGuard=require("../zip-guard.js");
+global.FileMetaExtraFormats=require("../formats-extra.js");
 const E=require("../universal-engine.js");
 const u=a=>new Uint8Array(a);
 const cat=(...parts)=>u(parts.flatMap(p=>Array.from(p)));
@@ -15,11 +17,11 @@ function pngChunk(tag,bytes){
 }
 function test(name,fn){fn();console.log("PASS "+name);}
 test("JPEG detection and safe APP1 removal",()=>{
- const input=cat(u([255,216,255,225,0,4,65,66,255,218,0,2,1,2,255,217]));
+ const input=cat(u([255,216,255,225,0,4,65,66,255,218,0,6,1,1,0,0,63,0,1,2,255,217]));
  const cleaned=E.binary(input,true);
  assert.equal(cleaned.format,"jpeg");assert.equal(cleaned.count,1);
- assert.deepEqual([...cleaned.bytes],[255,216,255,218,0,2,1,2,255,217]);
- assert.deepEqual([...input],[255,216,255,225,0,4,65,66,255,218,0,2,1,2,255,217]);
+ assert.deepEqual([...cleaned.bytes],[255,216,255,218,0,6,1,1,0,0,63,0,1,2,255,217]);
+ assert.deepEqual([...input],[255,216,255,225,0,4,65,66,255,218,0,6,1,1,0,0,63,0,1,2,255,217]);
  assert.equal(E.binary(cleaned.bytes,false).count,0);
 });
 test("PNG textual metadata removal without touching pixel chunk",()=>{
@@ -60,7 +62,7 @@ test("MP3 ID3v2 and ID3v1 removal",()=>{
  assert.equal(E.binary(c.bytes,false).count,0);
 });
 test("Disguised extension cannot override detected format",()=>{
- const jpeg=u([255,216,255,218,0,2,0,255,217]);
+ const jpeg=u([255,216,255,218,0,6,1,1,0,0,63,0,0,255,217]);
  assert.equal(E.identify(jpeg,"pretend.pdf"),"jpeg");
 });
 test("Damaged PNG CRC rejected rather than producing a fake-clean result",()=>{
@@ -81,6 +83,6 @@ test("Generic ZIP is unsupported",async()=>{
  assert.equal(result.supported,false);
 });
 test("No guarantee is made about invisible watermarks",()=>{
- const c=E.binary(u([255,216,255,218,0,2,0,255,217]),true);
+ const c=E.binary(u([255,216,255,218,0,6,1,1,0,0,63,0,0,255,217]),true);
  assert.ok(c.notes.join(" ").includes("watermark")||c.notes.join(" ").includes("metadata"));
 });
