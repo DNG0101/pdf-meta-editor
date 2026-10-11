@@ -41,32 +41,50 @@ function guardedExifOrientation(a){
  return 1;
 }
 function jpeg(a,strip){
- let p=2,count=0,removed=[],parts=[a.subarray(0,2)],foundEnd=false;
+ // Traverse *all* JPEG scans. Metadata may appear after an entropy-coded scan
+ // in progressive or multi-scan JPEG; stopping at the first SOS misses it.
+ let p=2,count=0,removed=[],parts=[a.subarray(0,2)],sawScan=false,sawEOI=false;
  while(p<a.length){
-  let start=p;if(a[p]!==255)throw Error("Malformed JPEG segment header");
+  const start=p;
+  if(a[p]!==255)throw Error("Malformed JPEG marker outside scan");
   while(p<a.length&&a[p]===255)p++;
-  if(p>=a.length)throw Error("Truncated JPEG");
+  if(p>=a.length)throw Error("Truncated JPEG marker");
   const marker=a[p++];
-  if(marker===0xda){
-   if(p+2>a.length)throw Error("Truncated JPEG scan");
-   const size=(a[p]<<8)|a[p+1];
-   if(size<6||p+size>a.length)throw Error("Invalid JPEG scan header");
-   if(a.length<2||a[a.length-2]!==255||a[a.length-1]!==217)throw Error("JPEG missing final EOI marker or has trailing data");
-   parts.push(a.subarray(start));foundEnd=true;break;
+  if(marker===0xd9){
+   if(p!==a.length)throw Error("Trailing bytes after JPEG EOI");
+   parts.push(a.subarray(start,p));sawEOI=true;break;
   }
-  if(marker===0xd9){parts.push(a.subarray(start,p));foundEnd=true;break;}
-  if(marker===0x01||(marker>=0xd0&&marker<=0xd8)){parts.push(a.subarray(start,p));continue;}
-  if(p+2>a.length)throw Error("Truncated JPEG length");
-  const size=(a[p]<<8)|a[p+1];if(size<2||p+size>a.length)throw Error("Invalid JPEG segment length");
+  if(marker===0x00||marker===0xd8||(marker>=0xd0&&marker<=0xd7))throw Error("Invalid standalone JPEG marker outside scan");
+  if(marker===0x01){parts.push(a.subarray(start,p));continue;}
+  if(p+2>a.length)throw Error("Truncated JPEG segment length");
+  const size=(a[p]<<8)|a[p+1];
+  if(size<2||size>a.length-p)throw Error("Invalid JPEG segment length");
   const end=p+size;
+  if(marker===0xda){
+   if(size<6)throw Error("Invalid JPEG scan header");
+   sawScan=true;
+   p=end;
+   while(p<a.length){
+    if(a[p]!==255){p++;continue;}
+    let q=p+1;while(q<a.length&&a[q]===255)q++;
+    if(q>=a.length)throw Error("Unterminated JPEG entropy scan");
+    const next=a[q];
+    if(next===0x00||(next>=0xd0&&next<=0xd7)){p=q+1;continue;}
+    break; // First actual marker after this scan.
+   }
+   if(p>=a.length)throw Error("Missing JPEG EOI after scan");
+   parts.push(a.subarray(start,p));
+   continue;
+  }
   const isMeta=marker===0xe1||marker===0xed||marker===0xfe;
-   if(strip&&marker===0xe1&&decode(a,p+2,6)==="Exif\0\0"&&guardedExifOrientation(a.subarray(p+8,end))!==1)throw Error("EXIF orientation is not 1; removing it would change the displayed image orientation");
+  if(strip&&marker===0xe1&&decode(a,p+2,6)==="Exif\0\0"&&guardedExifOrientation(a.subarray(p+8,end))!==1)
+   throw Error("EXIF orientation is not 1; refusing appearance-changing metadata removal");
   if(isMeta){count++;if(strip)removed.push("JPEG "+marker.toString(16).toUpperCase());}
   if(!strip||!isMeta)parts.push(a.subarray(start,end));
   p=end;
  }
- if(!foundEnd)throw Error("Incomplete JPEG image");
- return {count,removed,bytes:strip?concat(parts):a,notes:["JPEG APP2/ICC color profiles and unknown application segments are preserved; they may contain metadata."]};
+ if(!sawScan||!sawEOI)throw Error("Incomplete JPEG scan or EOI");
+ return {count,removed,bytes:strip?concat(parts):a,notes:["JPEG APP2/ICC and unknown application segments may still contain metadata; embedded content watermarks are not assessed."]};
 }
 const crcTable=Array.from({length:256},(_,n)=>{for(let k=0;k<8;k++)n=n&1?0xedb88320^(n>>>1):n>>>1;return n>>>0;});
 function crc32(bytes){let crc=0xffffffff;for(let i=0;i<bytes.length;i++)crc=crcTable[(crc^bytes[i])&255]^(crc>>>8);return (crc^0xffffffff)>>>0;}

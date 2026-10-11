@@ -54,11 +54,14 @@ function refresh(){
  $("u-inspect").disabled=busy||!selected.length;$("u-clean").disabled=busy||!selected.length;$("u-report").disabled=busy||!results.length;$("u-clear").disabled=busy;$("u-cancel").disabled=!busy||cancelRequested;
  $("u-rows").innerHTML=results.length?results.map(r=>'<tr><td>'+esc(r.name)+'<div class="u-note">'+(r.size/1048576).toFixed(2)+' MiB</div></td><td>'+esc(r.format)+'</td><td>'+esc(r.count)+'</td><td><span class="u-status '+(r.status==="Known tags rechecked"?"ok":(r.status.startsWith("Error")||r.status.startsWith("Unsupported")?"error":""))+'">'+esc(r.status)+'</span></td></tr>').join(""):'<tr><td colspan="4">No files selected</td></tr>';
  $("u-fields").innerHTML=results.length?results.map((r,i)=>{
-  const fields=r.metadataFields||[],warnings=r.metadataWarnings||[];
+  const fields=r.metadataFields||[],warnings=r.metadataWarnings||[],diff=r.metadataDiff;
   const rowHtml=fields.map(f=>'<tr><th scope="row">'+esc(f.name)+'</th><td>'+esc(f.value)+'</td><td>'+esc(f.source)+'</td></tr>').join("");
   const warningHtml=warnings.map(w=>'<div class="u-warning">'+esc(w)+'</div>').join("");
   return '<details class="u-fields" '+(results.length===1?'open':'')+'><summary>'+esc(r.name)+' — '+fields.length+' extracted field(s) · '+esc(r.format)+'</summary>'+
   (fields.length?'<table><thead><tr><th>Field</th><th>Value</th><th>Source</th></tr></thead><tbody>'+rowHtml+'</tbody></table>':'<p class="u-note">No field values extracted by the available parsers. This does not prove metadata absence.</p>')+
+  (diff?'<h4>Before / after metadata</h4><p class="u-note">Extracted fields removed: '+diff.removed.length+' · Retained: '+diff.retained.length+' · New: '+diff.added.length+'</p>'+
+  (diff.removed.length?'<div class="u-warning"><strong>Removed parsed values:</strong> '+diff.removed.map(f=>esc(f.name)+': '+esc(f.value)).join('; ')+'</div>':''):'')+
+  (r.contentVerification?'<div class="u-note">Content verification: '+esc(r.contentVerification.level)+' — '+esc(r.contentVerification.checks.join("; "))+'</div>':'')+
   warningHtml+'</details>';
  }).join(""):'<p class="u-note" style="padding:14px">Select and inspect files to see their real metadata fields.</p>';
  $("u-details").textContent=JSON.stringify(results.map(({file,...data})=>data),null,2);
@@ -83,7 +86,7 @@ async function run(clean){
   try{
    const data=await bytesOf(r);
    const out=await FileMetaEngine.process(data,r.name,{remove:clean,zipLib,pdfLib});
-   if(typeof FileMetaInspector==="undefined")throw Error("Metadata inspector unavailable; refusing to certify results");
+   if(typeof FileMetaInspector==="undefined"||typeof FileMetaVerifier==="undefined")throw Error("Metadata inspector/verifier unavailable; refusing to certify results");
    const inspected=await FileMetaInspector.inspect(data,r.name,{zipLib,pdfLib});
    r.metadataFields=inspected.fields;
    r.metadataWarnings=inspected.warnings;
@@ -95,6 +98,9 @@ async function run(clean){
    if(clean&&out.changed){
     const recheck=await FileMetaEngine.process(out.bytes,r.name,{remove:false,zipLib,pdfLib});
     if(!recheck.supported||recheck.count!==0)throw Error("Post-clean validation failed; refusing download");
+    const integrity=await FileMetaVerifier.verify(data,out.bytes,out.format,{zipLib,pdfLib});
+    if(!integrity.preserved)throw Error("Preserved file content was not verified; refusing download");
+    r.contentVerification=integrity;
     const after=await FileMetaInspector.inspect(out.bytes,r.name,{zipLib,pdfLib});
     if(after.format!==inspected.format)throw Error("Output format changed unexpectedly; refusing download");
     const fingerprints=["Width","Height","Channels","Sample rate","Pages"];
@@ -103,8 +109,16 @@ async function run(clean){
      if(beforeField&&(!afterField||afterField.value!==beforeField.value))throw Error("Output structural property changed: "+key);
     }
     r.remainingFields=after.fields;r.remainingFieldWarnings=after.warnings;
+    const originalFields=inspected.fields;
+    const originalSet=new Set(originalFields.map(f=>JSON.stringify([f.name,f.value,f.source])));
+    const remainingSet=new Set(after.fields.map(f=>JSON.stringify([f.name,f.value,f.source])));
+    r.metadataDiff={
+     removed:originalFields.filter(f=>!remainingSet.has(JSON.stringify([f.name,f.value,f.source]))),
+     retained:originalFields.filter(f=>remainingSet.has(JSON.stringify([f.name,f.value,f.source]))),
+     added:after.fields.filter(f=>!originalSet.has(JSON.stringify([f.name,f.value,f.source])))
+    };
     r.status="Known tags rechecked";r.changed=true;r.outputSize=out.bytes.length;
-    r.verification="Known removable blocks absent and detected structural fields match after reinspection; all-content and SynthID absence NOT certified";
+    r.verification="Known removable blocks absent, retained content "+integrity.level+" and selected structure rechecked; hidden metadata and SynthID NOT certified absent";
     r.outputSha256=await hash(out.bytes);
     const safeName=r.name.replace(/[\\/\x00-\x1f]/g,"_").slice(0,180)||"unnamed";
     const base=safeName.replace(/([.][^.]+)?$/,(_,extension)=>"_metadata-removed"+(extension||""));
