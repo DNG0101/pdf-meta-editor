@@ -21,7 +21,7 @@ test("JPEG detection and safe APP1 removal",()=>{
  const cleaned=E.binary(input,true);
  assert.equal(cleaned.format,"jpeg");assert.equal(cleaned.count,1);
  assert.deepEqual([...cleaned.bytes],[255,216,255,218,0,6,1,1,0,0,63,0,1,2,255,217]);
- assert.deepEqual([...input],[255,216,255,225,0,4,65,66,255,218,0,2,1,2,255,217]);
+ assert.deepEqual([...input],[255,216,255,225,0,4,65,66,255,218,0,6,1,1,0,0,63,0,1,2,255,217]);
  assert.equal(E.binary(cleaned.bytes,false).count,0);
 });
 test("PNG textual metadata removal without touching pixel chunk",()=>{
