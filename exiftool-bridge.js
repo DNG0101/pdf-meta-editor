@@ -81,7 +81,7 @@
   const args=["-json","-G4","-a","-u","-U","-struct"];
   let result;
   try{
-   result=await api.parseMetadata(file,{args,transform:JSON.parse});
+   result=await api.parseMetadata(file,{args,transform:raw=>{if(raw.length>MAX_JSON)throw Error("ExifTool JSON output exceeds the 8 MiB safety limit; use the desktop CLI for larger results");return JSON.parse(raw);}});
   }catch(e){throw Error("ExifTool WASM extraction failed: "+(e?.message||String(e)));}
   if(!result?.success)throw Error("ExifTool reported failure: "+String(result?.error||"Unknown error").slice(0,500));
   const rows=Array.isArray(result.data)?result.data:[result.data];
