@@ -1,0 +1,257 @@
+/* Metadata field inspection. Client-only. Explicit partial-coverage reporting.
+   This inspector reports actual parsed values rather than claiming all metadata was found. */
+(function(root,factory){
+ const api=factory();
+ if(typeof module==="object"&&module.exports)module.exports=api;
+ root.FileMetaInspector=api;
+})(typeof globalThis!=="undefined"?globalThis:this,function(){
+"use strict";
+const ascii=(a,p=0,n=a.length-p)=>Array.from(a.subarray(p,p+n),v=>String.fromCharCode(v)).join("");
+const le32=(a,p)=>(a[p]|a[p+1]<<8|a[p+2]<<16|a[p+3]<<24)>>>0;
+const be32=(a,p)=>((a[p]*16777216)+(a[p+1]<<16)+(a[p+2]<<8)+a[p+3])>>>0;
+const utf8=(a)=>new TextDecoder("utf-8",{fatal:false}).decode(a);
+const bytesPreview=(a)=>Array.from(a.subarray(0,24),x=>x.toString(16).padStart(2,"0")).join(" ");
+const label=(s)=>String(s).replace(/[\u0000-\u001f\u007f]/g," ").trim().slice(0,100);
+function inspect(a,name="",deps={}){
+ if(!(a instanceof Uint8Array)||!a.length)throw Error("Nonempty Uint8Array required");
+ const format=globalFormat(a,name);
+ const fields=[],warnings=[],seen=new Set();
+ function add(key,value,source){
+  if(fields.length>=400){if(!warnings.includes("Field display limited to 400 entries"))warnings.push("Field display limited to 400 entries");return;}
+  if(value===undefined||value===null||value==="")return;
+  let str=String(value).replace(/\u0000/g,"");
+  if(str.length>2048){str=str.slice(0,2048)+"… [truncated]";warnings.push("Some displayed values are truncated at 2048 characters");}
+  const title=label(key),id=source+":"+title;
+  if(seen.has(id))return;
+  seen.add(id);
+  fields.push({name:title,value:str,source});
+ }
+ const ctx={add,warnings};
+ if(format==="jpeg")jpeg(a,ctx);
+ else if(format==="png")png(a,ctx);
+ else if(format==="webp")webp(a,ctx);
+ else if(format==="mp3")mp3(a,ctx);
+ else if(format==="wav")wav(a,ctx);
+ else if(format==="gif")gif(a,ctx);
+ else if(format==="flac")flac(a,ctx);
+ else if(format==="pdf")return pdf(a,ctx,deps).then(()=>finish(format,fields,warnings));
+ else if(format==="zip"&&/\.(docx|xlsx|pptx)$/i.test(name))return office(a,ctx,deps).then(k=>finish(k,fields,warnings));
+ else warnings.push("No detailed metadata field parser for this format; file is not certified metadata-free.");
+ if(!["jpeg","png","webp","mp3","wav","gif","flac"].includes(format))warnings.push("Format recognition is inspection-only.");
+ return finish(format,fields,warnings);
+}
+function finish(format,fields,warnings){
+ return {format,fields,warnings:[...new Set(warnings)],coverage:"Partial: selected known properties only",watermarkStatus:"Not assessed: embedded SynthID/invisible watermarks require a trusted content detector"};
+}
+function globalFormat(a,name){
+ const E=typeof FileMetaEngine!=="undefined"?FileMetaEngine:null;
+ const X=typeof FileMetaExtraFormats!=="undefined"?FileMetaExtraFormats:null;
+ let k=E?E.identify(a,name):"unknown";
+ if(k==="unknown"&&X)k=X.identify(a)||"unknown";
+ return k;
+}
+const exifNames={0x010e:"ImageDescription",0x010f:"Make",0x0110:"Model",0x0112:"Orientation",0x0131:"Software",0x0132:"DateTime",0x013b:"Artist",0x8298:"Copyright",0x9003:"DateTimeOriginal",0x9004:"DateTimeDigitized",0x9286:"UserComment",0xa420:"ImageUniqueID",0xa434:"LensModel",0xa431:"BodySerialNumber",0x0001:"GPSLatitudeRef",0x0002:"GPSLatitude",0x0003:"GPSLongitudeRef",0x0004:"GPSLongitude",0x0005:"GPSAltitudeRef",0x0006:"GPSAltitude",0x001d:"GPSDateStamp",0x0007:"GPSTimeStamp"};
+function tiff(bytes,ctx,prefix="EXIF"){
+ if(bytes.length<8)throw Error("Invalid EXIF/TIFF header");
+ const bo=ascii(bytes,0,2);
+ if(bo!=="II"&&bo!=="MM")throw Error("Invalid EXIF byte order");
+ const little=bo==="II";
+ const u16=p=>{if(p<0||p+2>bytes.length)throw Error("EXIF short read");return little?bytes[p]|(bytes[p+1]<<8):(bytes[p]<<8)|bytes[p+1];};
+ const u32=p=>{if(p<0||p+4>bytes.length)throw Error("EXIF long read");return little?le32(bytes,p):be32(bytes,p);};
+ if(u16(2)!==42)throw Error("Unsupported TIFF variant");
+ const seen=new Set();
+ function ifd(pos,scope,depth){
+  if(depth>4||seen.has(pos))return;seen.add(pos);
+  if(pos<=0||pos+2>bytes.length)throw Error("EXIF IFD out of bounds");
+  const count=u16(pos);if(count>512||pos+2+count*12+4>bytes.length)throw Error("Invalid EXIF IFD size");
+  for(let i=0;i<count;i++){
+   const p=pos+2+i*12,tag=u16(p),type=u16(p+2),n=u32(p+4);
+   const width=({1:1,2:1,3:2,4:4,5:8,7:1,9:4,10:8})[type];
+   if(!width||n>250000)continue;
+   const sz=n*width,at=sz<=4?p+8:u32(p+8);
+   if(at+sz>bytes.length)throw Error("EXIF tag value out of bounds");
+   if([0x8769,0x8825,0xa005].includes(tag)){if(type===4&&n===1)ifd(u32(at),tag===0x8825?"GPS":"EXIF",depth+1);continue;}
+   let value;
+   if(type===2)value=ascii(bytes,at,Math.min(sz,1024)).replace(/\0+$/,"");
+   else if(type===3)value=Array.from({length:Math.min(n,8)},(_,j)=>u16(at+j*2)).join(", ");
+   else if(type===4)value=Array.from({length:Math.min(n,8)},(_,j)=>u32(at+j*4)).join(", ");
+   else if(type===5||type===10)value=Array.from({length:Math.min(n,4)},(_,j)=>{const o=at+j*8;return u32(o)+"/"+u32(o+4);}).join(", ");
+   else if(type===7)value=n+" bytes (binary)";
+   else value=n+" bytes";
+   const known=exifNames[tag]||("Tag 0x"+tag.toString(16).padStart(4,"0"));
+   ctx.add(scope+" "+known,value,prefix);
+  }
+  const next=u32(pos+2+count*12);if(next)ifd(next,scope,depth+1);
+ }
+ ifd(u32(4),"IFD0",0);
+}
+function jpeg(a,ctx){
+ let p=2;
+ while(p<a.length){
+  if(a[p]!==255)throw Error("Malformed JPEG marker");
+  while(a[p]===255)p++;
+  const mark=a[p++];
+  if(mark===0xda||mark===0xd9)break;
+  if(mark===0x01||(mark>=0xd0&&mark<=0xd8))continue;
+  if(p+2>a.length)throw Error("Truncated JPEG metadata header");
+  const n=(a[p]<<8)|a[p+1],from=p+2,end=p+n;
+  if(n<2||end>a.length)throw Error("Malformed JPEG segment");
+  const block=a.subarray(from,end);
+  if(mark===0xe1&&ascii(block,0,6)==="Exif\0\0")tiff(block.subarray(6),ctx);
+  else if(mark===0xe1&&ascii(block,0,29)==="http://ns.adobe.com/xap/1.0/\0")ctx.add("XMP preview",utf8(block.subarray(29)),"JPEG APP1 XMP");
+  else if(mark===0xed)ctx.add("IPTC/Photoshop resource","Present ("+block.length+" bytes)","JPEG APP13");
+  else if(mark===0xfe)ctx.add("Comment",utf8(block),"JPEG COM");
+  else if(mark===0xe2&&ascii(block,0,11)==="ICC_PROFILE")ctx.add("ICC profile","Present ("+block.length+" bytes)","JPEG APP2");
+  p=end;
+ }
+ ctx.warnings.push("JPEG EXIF orientation and ICC can affect rendering; output display fidelity is not automatically verified.");
+}
+function png(a,ctx){
+ let p=8;
+ while(p+12<=a.length){
+  const n=be32(a,p),type=ascii(a,p+4,4),from=p+8,end=from+n;
+  if(end+4>a.length)throw Error("Malformed PNG chunk");
+  const v=a.subarray(from,end);
+  if(type==="IHDR"&&n===13){ctx.add("Width",be32(v,0),"PNG IHDR");ctx.add("Height",be32(v,4),"PNG IHDR");ctx.add("Bit depth",v[8],"PNG IHDR");}
+  if(type==="tEXt"){const i=v.indexOf(0);if(i>0)ctx.add(utf8(v.subarray(0,i)),utf8(v.subarray(i+1)),"PNG tEXt");}
+  if(type==="zTXt"){const i=v.indexOf(0);ctx.add("Compressed text "+(i>0?utf8(v.subarray(0,i)):""),"Present, compressed; not decoded","PNG zTXt");}
+  if(type==="iTXt"){
+   const i=v.indexOf(0);if(i>0&&i+2<v.length){
+    const k=utf8(v.subarray(0,i)),compressed=v[i+1]===1;let at=i+3;
+    const l=v.indexOf(0,at);if(l>=0){at=l+1;const t=v.indexOf(0,at);if(t>=0){at=t+1;ctx.add(k,compressed?"Present, compressed; not decoded":utf8(v.subarray(at)),"PNG iTXt");}}
+   }
+  }
+  if(type==="eXIf")tiff(v,ctx,"PNG eXIf");
+  if(type==="tIME"&&n===7)ctx.add("Modified time",((v[0]<<8)|v[1])+"-"+v[2]+"-"+v[3]+" "+v[4]+":"+v[5]+":"+v[6],"PNG tIME");
+  if(type==="iCCP")ctx.add("ICC profile","Present ("+n+" bytes)","PNG iCCP");
+  p=end+4;if(type==="IEND")break;
+ }
+}
+function webp(a,ctx){
+ let p=12;
+ while(p+8<=a.length){
+  const type=ascii(a,p,4),n=le32(a,p+4),from=p+8;
+  if(from+n>a.length)throw Error("Malformed WebP chunk");
+  const chunk=a.subarray(from,from+n);
+  if(type==="EXIF"){const raw=ascii(chunk,0,6)==="Exif\0\0"?chunk.subarray(6):chunk;tiff(raw,ctx,"WebP EXIF");}
+  if(type==="XMP ")ctx.add("XMP preview",utf8(chunk),"WebP XMP");
+  if(type==="ICCP")ctx.add("ICC profile","Present ("+n+" bytes)","WebP ICCP");
+  p=from+n+(n&1);
+ }
+}
+function mp3(a,ctx){
+ let p=0;if(ascii(a,0,3)==="ID3"&&a.length>=10){
+  const major=a[3],size=(a[6]<<21)|(a[7]<<14)|(a[8]<<7)|a[9],end=Math.min(a.length,10+size);
+  ctx.add("ID3 version","2."+major,"ID3 header");
+  if(major===3||major===4){
+   p=10;
+   while(p+10<=end){
+    const id=ascii(a,p,4);
+    if(!/^[A-Z0-9]{4}$/.test(id))break;
+    const sz=major===4?((a[p+4]<<21)|(a[p+5]<<14)|(a[p+6]<<7)|a[p+7]):be32(a,p+4);
+    if(!sz||sz>end-p-10)break;
+    const v=a.subarray(p+10,p+10+sz);
+    const names={TIT2:"Title",TPE1:"Artist",TALB:"Album",TDRC:"Recording date",TYER:"Year",TRCK:"Track",TCON:"Genre",TCOM:"Composer",TENC:"Encoder"};
+    if(names[id]&&v.length){
+     const coding=v[0];
+     let textValue="";
+     if(coding===0)textValue=ascii(v,1,Math.min(v.length-1,2048));
+     else if(coding===3)textValue=utf8(v.subarray(1));
+     else if(coding===1||coding===2){const b=v.subarray(1);try{textValue=new TextDecoder("utf-16"+(coding===2?"be":"")).decode(b);}catch{textValue="Unicode text present (unable to decode)";}}
+     ctx.add(names[id],textValue,"ID3 "+id);
+    }else if(id==="APIC")ctx.add("Cover art","Present ("+sz+" bytes)","ID3 APIC");
+    else if(id==="COMM")ctx.add("Comment","Present ("+sz+" bytes)","ID3 COMM");
+    p+=10+sz;
+   }
+  }else ctx.warnings.push("ID3v2."+major+" frame decoding unavailable");
+ }
+ if(a.length>=128&&ascii(a,a.length-128,3)==="TAG"){
+  const x=a.length-128;
+  for(const [k,off,len] of [["Title",3,30],["Artist",33,30],["Album",63,30],["Year",93,4],["Comment",97,30]])ctx.add(k,ascii(a,x+off,len).replace(/\0+$/,"").trim(),"ID3v1");
+ }
+ ctx.warnings.push("MP3 other tag formats, unsynchronisation and embedded identifiers may remain.");
+}
+function wav(a,ctx){
+ let p=12;
+ while(p+8<=a.length){
+  const tag=ascii(a,p,4),n=le32(a,p+4),at=p+8;
+  if(n>a.length-at)throw Error("Malformed WAV chunk");
+  if(tag==="LIST"&&n>=4&&ascii(a,at,4)==="INFO"){
+   let q=at+4;
+   while(q+8<=at+n){
+    const key=ascii(a,q,4),len=le32(a,q+4);
+    if(len>at+n-q-8)break;
+    ctx.add(key,ascii(a,q+8,Math.min(len,2048)).replace(/\0+$/,""),"WAV LIST/INFO");
+    q+=8+len+(len&1);
+   }
+  }else if(["bext","iXML","axml","cart","DISP","id3 ","ID3 ","XMP "].includes(tag))ctx.add(tag,"Present ("+n+" bytes)","WAV "+tag);
+  else if(tag==="fmt "&&n>=16){ctx.add("Channels",a[at+2]|(a[at+3]<<8),"WAV fmt");ctx.add("Sample rate",le32(a,at+4),"WAV fmt");}
+  p=at+n+(n&1);
+ }
+}
+function gif(a,ctx){
+ let p=13+((a[10]&0x80)?3*(1<<((a[10]&7)+1)):0);
+ while(p<a.length){
+  const type=a[p++];if(type===0x3b)break;
+  if(type===0x2c){if(p+9>a.length)break;const flags=a[p+8];p+=9+((flags&0x80)?3*(1<<((flags&7)+1)):0);p++;p=skipSub(a,p);continue;}
+  if(type!==0x21||p>=a.length)break;
+  const ext=a[p++];if(ext===0xfe){
+   let parts=[],size=0;while(p<a.length){const n=a[p++];if(!n)break;if(n>a.length-p)throw Error("GIF comment truncated");if(size<4096)parts.push(a.subarray(p,p+n));size+=n;p+=n;}
+   ctx.add("Comment",utf8(parts.length?join(parts):new Uint8Array()),"GIF comment");
+  }else {if(p>=a.length)break;const n=a[p++];const app=ext===0xff?ascii(a,p,n):"";p+=n;p=skipSub(a,p);if(app==="XMP DataXMP")ctx.add("XMP packet","Present","GIF application");}
+ }
+}
+function skipSub(a,p){while(p<a.length){const n=a[p++];if(!n)return p;if(n>a.length-p)throw Error("Truncated GIF sub-block");p+=n;}throw Error("Unterminated GIF sub-blocks");}
+function join(parts){const n=parts.reduce((x,p)=>x+p.length,0),out=new Uint8Array(n);let at=0;for(const p of parts){out.set(p,at);at+=p.length;}return out;}
+function flac(a,ctx){
+ let p=4;
+ while(p+4<=a.length){
+  const h=a[p++],type=h&127,n=(a[p++]<<16)|(a[p++]<<8)|a[p++],last=!!(h&128);
+  if(p+n>a.length)throw Error("Malformed FLAC metadata");
+  if(type===4&&n>=8){
+   const end=p+n;let pos=p;
+   const vendorSize=le32(a,pos);pos+=4;
+   if(vendorSize<=end-pos){ctx.add("Encoder",utf8(a.subarray(pos,pos+vendorSize)),"FLAC Vorbis");pos+=vendorSize;
+    if(pos+4<=end){const count=le32(a,pos);pos+=4;
+     if(count>10000)throw Error("Excessive FLAC comments");
+     for(let j=0;j<count;j++){if(pos+4>end)throw Error("Invalid FLAC comments");const len=le32(a,pos);pos+=4;if(len>end-pos)throw Error("Invalid FLAC comment length");
+      const entry=utf8(a.subarray(pos,pos+len)),idx=entry.indexOf("=");if(idx>0)ctx.add(entry.slice(0,idx),entry.slice(idx+1),"FLAC Vorbis");pos+=len;
+     }
+    }
+   }
+  }else if(type===6)ctx.add("Embedded picture","Present ("+n+" bytes)","FLAC PICTURE");
+  else if(type===2)ctx.add("Application metadata","Present ("+n+" bytes)","FLAC APPLICATION");
+  p+=n;if(last)break;
+ }
+}
+async function pdf(a,ctx,{pdfLib}={}){
+ if(!pdfLib){ctx.warnings.push("PDF parser unavailable");return;}
+ const doc=await pdfLib.PDFDocument.load(a,{updateMetadata:false});
+ ctx.add("Pages",doc.getPageCount(),"PDF catalog");
+ for(const [k,get]of [["Title","getTitle"],["Author","getAuthor"],["Subject","getSubject"],["Keywords","getKeywords"],["Creator","getCreator"],["Producer","getProducer"],["Creation date","getCreationDate"],["Modification date","getModificationDate"]]){try{const value=doc[get]();if(value)ctx.add(k,value instanceof Date?value.toISOString():value,"PDF Info");}catch{}}
+ if(doc.catalog.get(pdfLib.PDFName.of("Metadata")))ctx.add("Catalog XMP","Present; packet content not decoded","PDF catalog");
+ ctx.warnings.push("Nested XMP, attachments, incremental revisions and content identifiers may remain.");
+}
+async function office(a,ctx,{zipLib}={}){
+ if(!zipLib||typeof FileMetaZipGuard==="undefined")throw Error("Office ZIP parser or decompression guard unavailable");
+ FileMetaZipGuard.preflight(a);
+ const zip=await zipLib.loadAsync(a,{checkCRC32:true});
+ const kind=zip.file("word/document.xml")?"docx":zip.file("xl/workbook.xml")?"xlsx":zip.file("ppt/presentation.xml")?"pptx":"zip";
+ if(kind==="zip"){ctx.warnings.push("ZIP not recognized as Office document");return kind;}
+ if(typeof DOMParser==="undefined")throw Error("XML parser unavailable");
+ const paths=["docProps/core.xml","docProps/app.xml","docProps/custom.xml"];
+ for(const path of paths){const file=zip.file(path);if(!file)continue;
+  const txt=await file.async("string");if(txt.length>2*1048576)throw Error("Office metadata XML exceeds safety budget");
+  const xml=new DOMParser().parseFromString(txt,"application/xml");
+  if(xml.getElementsByTagName("parsererror").length)throw Error("Invalid Office metadata XML");
+  const stack=[xml.documentElement];let count=0;
+  while(stack.length){const el=stack.pop();if(!el)continue;
+   for(const child of Array.from(el.children||[])){if(++count>3000)throw Error("Excessive Office metadata nodes");stack.push(child);}
+   if(!el.children||!el.children.length){const value=(el.textContent||"").trim();if(value)ctx.add(el.getAttribute("name")||el.localName||el.nodeName,value,path);}
+  }
+ }
+ ctx.warnings.push("Office authors, comments, revisions and embedded content outside docProps are not fully inspected.");
+ return kind;
+}
+return {inspect};
+});
