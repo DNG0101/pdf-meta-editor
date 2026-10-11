@@ -17,6 +17,14 @@ The universal interface now has an optional **Deep ExifTool scan (WASM)** button
 - Input limit: 256 MiB per file. ExifTool JSON output/import is limited to 8 MiB, with further bounded preview and export limits. Large reports or WASM startup may exceed device/browser memory.
 - The **Import ExifTool JSON** button works without the WASM module. Generate a report locally with `exiftool -json -G4 -a -u -U -struct "sample.jpg" > metadata.json`, then import it for a uniquely matching `SourceFile` name. Imported reports **are not authenticated** against the selected file's bytes.
 - ExifTool deep mode is **read-only** in this release. Do not assume tags it detects can all be safely removed. The built-in format-specific cleaner remains separate, and the app cannot certify absent SynthID/invisible content watermarks.
+### Fixed HTML-as-WASM CDN failure (v0.7.1)
+
+The deep reader now overrides the `zeroperl-ts` WebAssembly fetch callback. When a CDN returns an HTML document (`<!DOCTYPE ...>`, signature `3c 21 44 4f`) rather than the required WASM header (`00 61 73 6d`), the app rejects the response and attempts alternative, explicit Zeroperl binary URLs. It validates HTTP status, maximum file size, WASM header, `WebAssembly.validate` and a **pinned SHA-256 checksum**.
+
+The binary used is `@6over3/zeroperl-ts@1.0.10` (25,358,252 bytes), pinned SHA-256: `a6ae97f184fabc444b0b70d77c3d16475bfb3de16ebfb58ab8b2fbf98a53835e`. GitHub Actions additionally downloads and checks the actual hosted WASM. This fixes the asset-fetch failure path, though complete WebAssembly/ExifTool execution in all browsers still requires device-level testing.
+
+The WASM runtime is ~25 MiB and needs a working internet connection and cross-origin access to at least one binary host. If every provider is blocked by CORS, firewalls or connectivity restrictions, **Import ExifTool JSON** remains available. A hard refresh (Ctrl+Shift+R) is recommended after Pages deployment to clear the previous bridge.
+
 ## Format-specific cleanup
 
 | Format | Removes | Boundaries |
