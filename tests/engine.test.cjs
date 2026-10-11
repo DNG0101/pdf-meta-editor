@@ -27,12 +27,13 @@ test("JPEG detection and safe APP1 removal",()=>{
 test("PNG textual metadata removal without touching pixel chunk",()=>{
  const head=u([137,80,78,71,13,10,26,10]);
  const img=pngChunk("IDAT",u([1,2,3]));
- const input=cat(head,pngChunk("tEXt",ascii("a=b")),img,pngChunk("IEND",u([])));
+ const ihdr=pngChunk("IHDR",cat(be(3),be(2),u([8,2,0,0,0])));
+ const input=cat(head,ihdr,pngChunk("tEXt",ascii("a=b")),img,pngChunk("IEND",u([])));
  const cleaned=E.binary(input,true);
  assert.equal(cleaned.count,1);assert.equal(E.binary(cleaned.bytes,false).count,0);
  assert.equal(E.binary(cleaned.bytes,false).format,"png");
  assert.ok(cleaned.bytes.length<input.length);
- assert.deepEqual([...cleaned.bytes.slice(8,8+img.length)],[...img]);
+ assert.deepEqual([...cleaned.bytes.slice(8+ihdr.length,8+ihdr.length+img.length)],[...img]);
 });
 test("WebP XMP removal and extended header flag repair",()=>{
  const vp8x=chunk("VP8X",u([12,0,0,0,1,0,0,1,0,0]));
