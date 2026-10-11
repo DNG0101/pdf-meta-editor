@@ -84,7 +84,7 @@ function jpeg(a,strip){
   p=end;
  }
  if(!sawScan||!sawEOI)throw Error("Incomplete JPEG scan or EOI");
- return {count,removed,bytes:strip?concat(parts):a,notes:["JPEG APP2/ICC, unknown application segments and embedded content identifiers may remain."]};
+ return {count,removed,bytes:strip?concat(parts):a,notes:["JPEG APP2/ICC and unknown application segments may still contain metadata; embedded content watermarks are not assessed."]};
 }
 const crcTable=Array.from({length:256},(_,n)=>{for(let k=0;k<8;k++)n=n&1?0xedb88320^(n>>>1):n>>>1;return n>>>0;});
 function crc32(bytes){let crc=0xffffffff;for(let i=0;i<bytes.length;i++)crc=crcTable[(crc^bytes[i])&255]^(crc>>>8);return (crc^0xffffffff)>>>0;}
