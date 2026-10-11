@@ -21,7 +21,7 @@ function inspect(a,name="",deps={}){
   if(value===undefined||value===null||value==="")return;
   let str=String(value).replace(/\u0000/g,"");
   if(str.length>2048){str=str.slice(0,2048)+"… [truncated]";warnings.push("Some displayed values are truncated at 2048 characters");}
-  const title=label(key),id=source+":"+title;
+  const title=label(key),id=source+":"+title+":"+str;
   if(seen.has(id))return;
   seen.add(id);
   fields.push({name:title,value:str,source});
