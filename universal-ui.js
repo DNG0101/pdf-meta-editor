@@ -52,7 +52,11 @@ function setFiles(fs){
  if(busy){$("u-progress").textContent="Finish or cancel the active operation before selecting different files.";return;}
  const version=++selectionVersion;
  selected=fs.slice(0,100);
- results=selected.map(f=>({file:f,name:f.name,size:f.size,format:"Detecting",count:"—",status:"Queued for inspection",notes:[]}));
+ results=selected.map(f=>({
+ file:f,name:f.name,size:f.size,
+ fileProperties:{sizeBytes:f.size,reportedMimeType:f.type||"Not supplied by browser",lastModified:f.lastModified?new Date(f.lastModified).toISOString():"Not supplied by browser"},
+ format:"Detecting",count:"—",status:"Queued for inspection",notes:[]
+}));
  $("u-progress").textContent=selected.length+" file(s) selected. Starting automatic inspection…"+(fs.length>100?" Maximum first 100 accepted.":"");
  refresh();
  // Defer one microtask so the queued state can render before inspection begins.
@@ -67,7 +71,7 @@ function refresh(){
   const allFields=r.metadataFields||[];
   const fields=filter?allFields.filter(f=>[f.name,f.value,f.source,f.kind].some(v=>String(v||"").toLowerCase().includes(filter))):allFields;
   const warnings=r.metadataWarnings||[],diff=r.metadataDiff;
-  const meta=fields.filter(f=>f.kind!=="technical"),technical=fields.filter(f=>f.kind==="technical");
+  const meta=allFields.filter(f=>f.kind!=="technical"),technical=allFields.filter(f=>f.kind==="technical");
   const rowHtml=fields.map(f=>{
    const value=String(f.value||""),short=value.length>450;
    const view=short?esc(value.slice(0,450))+'… <details><summary>Show full inspected value ('+value.length+' characters)</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;overflow:auto">'+esc(value)+'</pre></details>':esc(value);
@@ -88,7 +92,15 @@ function refresh(){
  $("u-details").textContent=JSON.stringify(results.map(({file,...data})=>data),null,2);
 }
 async function bytesOf(r){if(r.size>maxBytes)throw Error("File exceeds 256 MiB browser safety limit");if(!r.size)throw Error("Empty file");return new Uint8Array(await r.file.arrayBuffer());}
-async function hash(a){if(a.length>32*1024*1024)return "Skipped for large file";const h=await crypto.subtle.digest("SHA-256",a);return Array.from(new Uint8Array(h),v=>v.toString(16).padStart(2,"0")).join("");}
+async function hash(a){
+ if(a.length>32*1024*1024)return "Skipped for large file (>32 MiB)";
+ if(typeof crypto==="undefined"||!crypto.subtle||typeof crypto.subtle.digest!=="function")
+  return "Unavailable: browser secure context required";
+ try{
+  const h=await crypto.subtle.digest("SHA-256",a);
+  return Array.from(new Uint8Array(h),v=>v.toString(16).padStart(2,"0")).join("");
+ }catch(e){return "Unavailable: browser hashing failed";}
+}
 function download(bytes,name,type){const url=URL.createObjectURL(new Blob([bytes],{type:type||"application/octet-stream"}));const link=document.createElement("a");link.href=url;link.download=name;document.body.appendChild(link);link.click();setTimeout(()=>{URL.revokeObjectURL(url);link.remove();},20000);}
 async function run(clean){
  if(busy)return;
@@ -151,7 +163,17 @@ async function run(clean){
     usedOutputNames.add(fileName);
     outputs.push({filename:fileName,bytes:out.bytes});
    }else r.status=clean?"No known removable blocks":"Inspected";
-  }catch(e){r.status="Error: "+(e.message||String(e));r.notes=[r.status];}
+  }catch(e){
+    r.status="Error: "+(e.message||String(e));
+    r.notes=[r.status];
+    if(r.format==="Detecting"||r.format==="Pending"){
+      try{
+        let detected=FileMetaEngine.identify(new Uint8Array(await r.file.slice(0,4096).arrayBuffer()),r.name);
+        if(detected==="unknown"&&typeof FileMetaExtraFormats!=="undefined")detected=FileMetaExtraFormats.identify(new Uint8Array(await r.file.slice(0,4096).arrayBuffer()))||detected;
+        r.format=detected;
+      }catch(_){r.format="Unknown";}
+    }
+  }
   refresh();
  }
  let packageError="";
@@ -162,7 +184,15 @@ async function run(clean){
    else packageError=" Batch ZIP unavailable (JSZip missing).";
   }catch(e){packageError=" Export failed: "+(e.message||e);}
  }
- busy=false;$("u-progress").textContent=(clean?"Cleanup finished. ":"Inspection finished. ")+results.filter(r=>r.status==="Known tags rechecked").length+" rechecked file(s) with selected metadata removed."+packageError;refresh();
+ busy=false;
+ const failures=results.filter(r=>r.status.startsWith("Error")).length;
+ const unsupported=results.filter(r=>r.status.startsWith("Unsupported")).length;
+ const cleaned=results.filter(r=>r.status==="Known tags rechecked").length;
+ const inspected=results.filter(r=>r.status==="Inspected"||r.status==="No known removable blocks").length;
+ $("u-progress").textContent=(clean?"Cleanup finished. ":"Inspection finished. ")+
+ inspected+" inspected without changes, "+cleaned+" cleaned and verified, "+unsupported+" read-only/unsupported, "+
+ failures+" error(s)."+packageError;
+ refresh();
 }
 $("u-filter").oninput=()=>refresh();
 $("u-inspect").onclick=()=>run(false);
