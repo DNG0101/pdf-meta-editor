@@ -25,9 +25,9 @@ nav.innerHTML='<button id="u-mode" aria-pressed="true" type="button">All files �
 header.insertAdjacentElement("afterend",nav);
 var shell=document.createElement("section");shell.className="u-shell";shell.setAttribute("aria-label","Local metadata workspace");
 shell.innerHTML=[
-'<div class="u-hero"><h2>Universal File Metadata Inspector & Cleaner</h2><p>Inspect any local file. Remove supported metadata from JPEG, PNG, WebP, MP3, WAV, PDF and Office files. Unsupported types are inspection-only. SynthID and other embedded content watermarks are not certified removable or detectable.</p></div>',
-'<div class="u-drop" id="u-drop" role="button" tabindex="0" aria-label="Choose local files"><strong>Drop files here or choose files</strong><p class="u-note">Local processing · No file upload · Up to 100 files · 256 MiB per file</p><button id="u-choose" type="button" class="u-button primary">Choose files</button><input id="u-files" type="file" multiple hidden/></div>',
-'<div class="u-toolbar"><button class="u-button primary" id="u-inspect" disabled>Inspect files</button><button class="u-button" id="u-clean" disabled>Remove supported metadata & download</button><button class="u-button" id="u-report" disabled>Export JSON report</button><button class="u-button" id="u-clear">Clear</button></div>',
+'<div class="u-hero"><h2>Universal File Metadata Inspector & Cleaner</h2><p>Inspect any local file. Remove supported metadata from JPEG, PNG, WebP, GIF, FLAC, MP3, WAV, PDF and Office files. Other recognized file formats are inspection-only. Unsupported types are inspection-only. SynthID and other embedded content watermarks are not certified removable or detectable.</p></div>',
+'<div class="u-drop" id="u-drop" role="button" tabindex="0" aria-label="Choose local files"><strong>Drop files here or choose files</strong><p class="u-note">Local processing · No file upload · Up to 100 files · 256 MiB per file · 384 MiB per batch</p><button id="u-choose" type="button" class="u-button primary">Choose files</button><input id="u-files" type="file" multiple hidden/></div>',
+'<div class="u-toolbar"><button class="u-button primary" id="u-inspect" disabled>Inspect files</button><button class="u-button" id="u-clean" disabled>Remove supported metadata & download</button><button class="u-button" id="u-cancel" disabled>Cancel after current file</button><button class="u-button" id="u-report" disabled>Export JSON report</button><button class="u-button" id="u-clear">Clear</button></div>',
 '<p class="u-note"><strong>Limits:</strong> Format-aware cleanup does not prove absence of all metadata, invisible watermarks, or SynthID. Existing signatures are protected; keep the original file. No file is sent to a backend.</p>',
 '<p class="u-note" id="u-progress" role="status" aria-live="polite">Select files to begin.</p>',
 '<section class="u-panel"><h3>File inspection and cleaning</h3><div style="overflow-x:auto"><table class="u-table"><thead><tr><th>File</th><th>Format</th><th>Known metadata blocks</th><th>Status</th></tr></thead><tbody id="u-rows"></tbody></table></div></section>',
@@ -35,7 +35,7 @@ shell.innerHTML=[
 ].join("");
 header.parentNode.insertBefore(shell,main);main.style.display="none";
 var $=id=>document.getElementById(id);
-var selected=[],results=[],busy=false,maxBytes=256*1024*1024;
+var selected=[],results=[],busy=false,cancelRequested=false,maxBytes=256*1024*1024,maxBatchBytes=384*1048576;
 function mode(v){shell.style.display=v?"":"none";main.style.display=v?"none":"";$("u-mode").setAttribute("aria-pressed",String(v));$("u-pdf-mode").setAttribute("aria-pressed",String(!v));}
 $("u-mode").onclick=()=>mode(true);$("u-pdf-mode").onclick=()=>mode(false);
 var drop=$("u-drop"),input=$("u-files");
@@ -49,30 +49,47 @@ input.onchange=()=>setFiles(Array.from(input.files));
 function setFiles(fs){if(busy)return;selected=fs.slice(0,100);results=selected.map(f=>({file:f,name:f.name,size:f.size,format:"Pending",count:"—",status:"Ready",notes:[]}));$("u-progress").textContent=selected.length+" files selected."+(fs.length>100?" Maximum first 100 accepted.":"");refresh();}
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
 function refresh(){
- $("u-inspect").disabled=busy||!selected.length;$("u-clean").disabled=busy||!selected.length;$("u-report").disabled=busy||!results.length;$("u-clear").disabled=busy;
- $("u-rows").innerHTML=results.length?results.map(r=>'<tr><td>'+esc(r.name)+'<div class="u-note">'+(r.size/1048576).toFixed(2)+' MiB</div></td><td>'+esc(r.format)+'</td><td>'+esc(r.count)+'</td><td><span class="u-status '+(r.status==="Verified"?"ok":(r.status.startsWith("Error")||r.status==="Unsupported"?"error":""))+'">'+esc(r.status)+'</span></td></tr>').join(""):'<tr><td colspan="4">No files selected</td></tr>';
+ $("u-inspect").disabled=busy||!selected.length;$("u-clean").disabled=busy||!selected.length;$("u-report").disabled=busy||!results.length;$("u-clear").disabled=busy;$("u-cancel").disabled=!busy||cancelRequested;
+ $("u-rows").innerHTML=results.length?results.map(r=>'<tr><td>'+esc(r.name)+'<div class="u-note">'+(r.size/1048576).toFixed(2)+' MiB</div></td><td>'+esc(r.format)+'</td><td>'+esc(r.count)+'</td><td><span class="u-status '+(r.status==="Known tags rechecked"?"ok":(r.status.startsWith("Error")||r.status==="Unsupported"?"error":""))+'">'+esc(r.status)+'</span></td></tr>').join(""):'<tr><td colspan="4">No files selected</td></tr>';
  $("u-details").textContent=JSON.stringify(results.map(({file,...data})=>data),null,2);
 }
 async function bytesOf(r){if(r.size>maxBytes)throw Error("File exceeds 256 MiB browser safety limit");if(!r.size)throw Error("Empty file");return new Uint8Array(await r.file.arrayBuffer());}
 async function hash(a){if(a.length>32*1024*1024)return "Skipped for large file";const h=await crypto.subtle.digest("SHA-256",a);return Array.from(new Uint8Array(h),v=>v.toString(16).padStart(2,"0")).join("");}
 function download(bytes,name,type){const url=URL.createObjectURL(new Blob([bytes],{type:type||"application/octet-stream"}));const link=document.createElement("a");link.href=url;link.download=name;document.body.appendChild(link);link.click();setTimeout(()=>{URL.revokeObjectURL(url);link.remove();},20000);}
 async function run(clean){
- if(busy)return;busy=true;refresh();const outputs=[],zipLib=window.JSZip,pdfLib=window.PDFLib;
+ if(busy)return;
+ if(selected.reduce((n,f)=>n+f.size,0)>maxBatchBytes){
+  $("u-progress").textContent="The batch exceeds 384 MiB. Choose fewer files to limit browser memory use.";return;
+ }
+ cancelRequested=false;busy=true;refresh();
+ const outputs=[],usedOutputNames=new Set(),zipLib=window.JSZip,pdfLib=window.PDFLib;
  for(let i=0;i<results.length;i++){
+  await new Promise(resolve=>setTimeout(resolve,0));
+  if(cancelRequested){
+   for(let j=i;j<results.length;j++)results[j].status="Canceled";
+   break;
+  }
   const r=results[i];r.status=clean?"Cleaning":"Inspecting";$("u-progress").textContent=(i+1)+"/"+results.length+": "+r.name;refresh();
   try{
    const data=await bytesOf(r);
    const out=await FileMetaEngine.process(data,r.name,{remove:clean,zipLib,pdfLib});
    r.format=out.format;r.count=out.count;r.notes=out.notes||[];r.removed=out.removed;r.verification=out.verification;
    r.sha256=await hash(data);
+   r.synthIdDetection="Not assessed: no trusted content watermark detector is integrated";
    if(!out.supported){r.status="Unsupported";continue;}
    if(clean&&out.changed){
     const recheck=await FileMetaEngine.process(out.bytes,r.name,{remove:false,zipLib,pdfLib});
     if(!recheck.supported||recheck.count!==0)throw Error("Post-clean validation failed; refusing download");
-    r.status="Verified";r.changed=true;r.outputSize=out.bytes.length;
-    const fileName=r.name.replace(/([.][^.]+)?$/,m=>"_metadata-removed"+m);
+    r.status="Known tags rechecked";r.changed=true;r.outputSize=out.bytes.length;
+    r.verification="Known removable metadata blocks absent on rescan; hidden content marks and other metadata not certified";
+    r.outputSha256=await hash(out.bytes);
+    const safeName=r.name.replace(/[\\/\x00-\x1f]/g,"_").slice(0,180)||"unnamed";
+    const base=safeName.replace(/([.][^.]+)?$/,(_,extension)=>"_metadata-removed"+(extension||""));
+    let fileName=base,number=2;
+    while(usedOutputNames.has(fileName)){fileName=base.replace(/([.][^.]+)?$/,(_,ext)=>"_"+number+++(ext||""));}
+    usedOutputNames.add(fileName);
     outputs.push({filename:fileName,bytes:out.bytes});
-   }else r.status=clean?"Nothing removable":"Inspected";
+   }else r.status=clean?"No known removable blocks":"Inspected";
   }catch(e){r.status="Error: "+(e.message||String(e));r.notes=[r.status];}
   refresh();
  }
@@ -84,12 +101,13 @@ async function run(clean){
    else packageError=" Batch ZIP unavailable (JSZip missing).";
   }catch(e){packageError=" Export failed: "+(e.message||e);}
  }
- busy=false;$("u-progress").textContent=(clean?"Cleanup finished. ":"Inspection finished. ")+results.filter(r=>r.status==="Verified").length+" verified changed file(s)."+packageError;refresh();
+ busy=false;$("u-progress").textContent=(clean?"Cleanup finished. ":"Inspection finished. ")+results.filter(r=>r.status==="Known tags rechecked").length+" rechecked file(s) with selected metadata removed."+packageError;refresh();
 }
 $("u-inspect").onclick=()=>run(false);
 $("u-clean").onclick=()=>run(true);
+$("u-cancel").onclick=()=>{if(busy){cancelRequested=true;$("u-progress").textContent="Cancellation requested; current operation will finish first.";refresh();}};
 $("u-report").onclick=()=>{
- const doc={tool:"Local File Metadata Inspector",generatedAt:new Date().toISOString(),warning:"This tool does not certify complete metadata removal, including SynthID or invisible watermarks.",files:results.map(({file,...r})=>r)};
+ const doc={tool:"Local File Metadata Inspector",generatedAt:new Date().toISOString(),warning:"Only known format-specific metadata is checked. SynthID and invisible watermarks are NOT assessed and cannot be certified absent.",files:results.map(({file,...r})=>r)};
  download(new TextEncoder().encode(JSON.stringify(doc,null,2)),"metadata-report.json","application/json");
 };
 $("u-clear").onclick=()=>{selected=[];results=[];input.value="";$("u-progress").textContent="Selection cleared.";refresh();};
