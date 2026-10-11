@@ -48,6 +48,23 @@ The browser workbench currently requires some CDN dependencies, must handle file
 
 **SynthID is not ordinary EXIF or document metadata.** It may be encoded within pixels, audio, or other content. The tool cannot guarantee its detection or removal. A status of *Verified* means only that known format-specific removable blocks are absent upon reinspection. It is not certification that every piece of metadata, trace, or watermark is gone.
 
+## Version 0.5: verified sanitization
+
+The removal button now requires **two separate results** before releasing a cleaned file:
+
+1. A reinspection of the cleaned file confirms no additional blocks recognized by the cleaner remain.
+2. The independent content verifier confirms that preserved binary content matches the original for JPEG, PNG, WebP, GIF, MP3, WAV and FLAC. For Office files, it compares retained ZIP entries after decompression. PDF validation currently checks page count, geometry and rotation only: **PDF rendering and text are not fully verified**.
+
+The interface exposes a before/after comparison for the parsed metadata fields. This comparison is **not exhaustive**, because the field inspector covers a documented subset of metadata structures. A successful result is therefore only a *scoped verification*, not a metadata-free or watermark-free certificate.
+
+Specific corrections in this version:
+
+- Multi-scan JPEGs are inspected across all scan boundaries, including metadata following the first scan; entropy-coded image payloads are kept byte-for-byte.
+- PNG zTXt and compressed iTXt text values are decompressed and displayed when the browser supports DecompressionStream, under a 256 KiB decompressed-value budget. Unsupported, malformed and oversize compressed fields are disclosed, never silently marked as decoded.
+- ZIP validation compares local and central entry headers, rejects contradictory compression/method/CRC/file names and detects overlapping entries before attempting Office decompression.
+- Unsupported formats remain inspection-only; the cleaner never claims universal operation.
+- SynthID or other content-embedded identifiers are **not tested or removed by this tool**. Use a trusted, format-appropriate detector for any claim about their presence; ordinary metadata stripping cannot prove absence.
+
 ## Safeguards and limitations
 
 - Original files are never overwritten.
@@ -67,6 +84,6 @@ Serve this directory over HTTP (for example: python3 -m http.server 8080), then 
 
 Node.js 22+ commands: npm install; npm run verify.
 
-Verification includes JPEG/PNG/WebP/MP3/WAV/GIF/FLAC byte-structure fixtures, PDF and Office reinspection, malicious ZIP resource bounds, field extraction/cleaning round trips, display-orientation refusal and a browser DOM test asserting that metadata values display safely. Test success is not universal compatibility certification.
+Verification includes byte-by-byte preservation and tampering cases across JPEG/PNG/WebP/MP3/WAV/GIF/FLAC, PDF structural cases, Office archive entry comparisons and JPEG multiscan/PNG compressed-text cases, as well as JPEG/PNG/WebP/MP3/WAV/GIF/FLAC byte-structure fixtures, PDF and Office reinspection, malicious ZIP resource bounds, field extraction/cleaning round trips, display-orientation refusal and a browser DOM test asserting that metadata values display safely. Test success is not universal compatibility certification.
 
 Each new file format must be implemented with a real parser, a format-specific cleaner, and a post-clean validation step. Never blindly replace byte sequences in arbitrary files.
