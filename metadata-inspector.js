@@ -86,16 +86,29 @@ function tiff(bytes,ctx,prefix="EXIF"){
  ifd(u32(4),"IFD0",0);
 }
 function jpeg(a,ctx){
- let p=2;
+ let p=2,scanCount=0;
  while(p<a.length){
-  if(a[p]!==255)throw Error("Malformed JPEG marker");
-  while(a[p]===255)p++;
+  if(a[p]!==255)throw Error("Malformed JPEG segment marker");
+  while(p<a.length&&a[p]===255)p++;
+  if(p>=a.length)throw Error("Truncated JPEG marker");
   const mark=a[p++];
-  if(mark===0xda||mark===0xd9)break;
-  if(mark===0x01||(mark>=0xd0&&mark<=0xd8))continue;
+  if(mark===0xd9)break;
+  if(mark===0x01)continue;
+  if(mark===0x00||mark===0xd8||(mark>=0xd0&&mark<=0xd7))throw Error("Invalid JPEG marker outside scan");
   if(p+2>a.length)throw Error("Truncated JPEG metadata header");
   const n=(a[p]<<8)|a[p+1],from=p+2,end=p+n;
   if(n<2||end>a.length)throw Error("Malformed JPEG segment");
+  if(mark===0xda){
+   scanCount++;p=end;
+   while(p<a.length){
+    if(a[p]!==255){p++;continue;}
+    let q=p+1;while(q<a.length&&a[q]===255)q++;
+    if(q>=a.length)throw Error("Truncated JPEG entropy scan");
+    if(a[q]===0||(a[q]>=0xd0&&a[q]<=0xd7)){p=q+1;continue;}
+    break;
+   }
+   continue;
+  }
   const block=a.subarray(from,end);
   if(mark===0xe1&&ascii(block,0,6)==="Exif\0\0")tiff(block.subarray(6),ctx);
   else if(mark===0xe1&&ascii(block,0,29)==="http://ns.adobe.com/xap/1.0/\0")ctx.add("XMP preview",utf8(block.subarray(29)),"JPEG APP1 XMP");
@@ -104,6 +117,7 @@ function jpeg(a,ctx){
   else if(mark===0xe2&&ascii(block,0,11)==="ICC_PROFILE")ctx.add("ICC profile","Present ("+block.length+" bytes)","JPEG APP2");
   p=end;
  }
+ ctx.add("JPEG scans",scanCount,"JPEG structure");
  ctx.warnings.push("JPEG EXIF orientation and ICC can affect rendering; output display fidelity is not automatically verified.");
 }
 function png(a,ctx){
