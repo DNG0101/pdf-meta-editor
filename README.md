@@ -7,6 +7,16 @@ Local-first, GitHub Pages compatible file metadata analysis and conservative rem
 - **All files:** automatically inspect files on selection, detect format signatures, **show parsed field names, actual values and sources** where supported, remove known metadata where supported, verify output by reinspection, batch-clean files, and export JSON reports.
 - **Advanced PDF:** detailed inspection and editing of the eight supported writable Info fields (Title, Author, Subject, Keywords, Creator, Producer, CreationDate and ModDate). Other values are read-only.
 
+## ExifTool deep metadata inspection (v0.7, experimental)
+
+The universal interface now has an optional **Deep ExifTool scan (WASM)** button. It uses the third-party `@uswriting/exiftool@1.0.9` browser wrapper (ExifTool 13.42), lazily loaded from a third-party ESM CDN. This greatly expands the possible *inspection* tags compared with the custom format parsers, but it does not turn all formats into safely editable/removable formats.
+
+- Click **Deep ExifTool scan (WASM)** after selecting a file. Grouped/tagged values appear in a separate searchable panel and the JSON report.
+- The reader requests `-json -G4 -a -u -U -struct`. ExifTool may still miss proprietary or unknown binary structures. The current port and CDN/WASM dependencies are experimental and **not independently verified in every browser**.
+- The integration is intended to process file bytes locally, but executable third-party JavaScript/WASM is loaded from a CDN on request. Initial network access and trust in that provider are required; this mode is not fully self-hosted/offline.
+- Input limit: 256 MiB per file. ExifTool JSON output/import is limited to 8 MiB, with further bounded preview and export limits. Large reports or WASM startup may exceed device/browser memory.
+- The **Import ExifTool JSON** button works without the WASM module. Generate a report locally with `exiftool -json -G4 -a -u -U -struct "sample.jpg" > metadata.json`, then import it for a uniquely matching `SourceFile` name. Imported reports **are not authenticated** against the selected file's bytes.
+- ExifTool deep mode is **read-only** in this release. Do not assume tags it detects can all be safely removed. The built-in format-specific cleaner remains separate, and the app cannot certify absent SynthID/invisible content watermarks.
 ## Format-specific cleanup
 
 | Format | Removes | Boundaries |
