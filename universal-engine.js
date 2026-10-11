@@ -40,7 +40,8 @@ function jpeg(a,strip){
  if(!foundEnd)throw Error("Incomplete JPEG image");
  return {count,removed,bytes:strip?concat(parts):a,notes:["JPEG APP2/ICC color profiles and unknown application segments are preserved; they may contain metadata."]};
 }
-const PNG_SIG=new Uint8Array([137,80,78,71,13,10,26,10]);
+const crcTable=Array.from({length:256},(_,n)=>{for(let k=0;k<8;k++)n=n&1?0xedb88320^(n>>>1):n>>>1;return n>>>0;});
+function crc32(bytes){let crc=0xffffffff;for(let i=0;i<bytes.length;i++)crc=crcTable[(crc^bytes[i])&255]^(crc>>>8);return (crc^0xffffffff)>>>0;}
 function png(a,strip){
  let p=8,count=0,removed=[],parts=[a.subarray(0,8)],endSeen=false;
  const drop=new Set(["tEXt","zTXt","iTXt","eXIf","tIME"]);
@@ -48,6 +49,7 @@ function png(a,strip){
   if(p+12>a.length)throw Error("Truncated PNG chunk");
   const len=be32(a,p),type=decode(a,p+4,4),end=p+12+len;
   if(len>a.length-p-12)throw Error("Invalid PNG chunk length");
+  if(crc32(a.subarray(p+4,p+8+len))!==be32(a,p+8+len))throw Error("PNG chunk CRC mismatch; refusing to process damaged file");
   const isMeta=drop.has(type);if(isMeta){count++;if(strip)removed.push(type);}
   if(!strip||!isMeta)parts.push(a.subarray(p,end));
   p=end;
