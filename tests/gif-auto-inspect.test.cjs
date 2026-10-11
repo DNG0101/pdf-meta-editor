@@ -67,7 +67,7 @@ test("Selecting a GIF starts automatic inspection without clicking Inspect files
  try{
   w.TextDecoder=TextDecoder;w.TextEncoder=TextEncoder;
   Object.defineProperty(w.crypto,"subtle",{configurable:true,value:{digest:async()=>new ArrayBuffer(32)}});
-  for(const script of ["zip-guard.js","formats-extra.js","universal-engine.js","metadata-inspector.js","content-verifier.js","universal-ui.js"])w.eval(read(script));
+  for(const script of ["zip-guard.js","formats-extra.js","universal-engine.js","metadata-extended.js","metadata-inspector.js","content-verifier.js","universal-ui.js"])w.eval(read(script));
   const bytes=sampleGif();
   const input=d.getElementById("u-files");
   Object.defineProperty(input,"files",{configurable:true,value:[{name:"FoodNearby_Workflow_Animated.gif",size:bytes.length,arrayBuffer:async()=>bytes.buffer.slice(0)}]});
