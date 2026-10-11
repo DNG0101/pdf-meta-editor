@@ -17,7 +17,7 @@ function preflight(a,limits={}){
  if(count===65535||size===0xffffffff||start===0xffffffff)throw Error("ZIP64 unsupported in browser sanitizer");
  if(count!==onDisk||count>maxEntries)throw Error("Invalid ZIP entry count or count exceeds safety budget");
  if(start>eocd||size>eocd-start)throw Error("Invalid ZIP directory bounds");
- const names=new Set();let p=start,total=0;
+ const names=new Set(),ranges=[];let p=start,total=0;
  for(let i=0;i<count;i++){
   if(p+46>eocd||le32(a,p)!==0x02014b50)throw Error("Invalid ZIP central directory entry");
   const flags=le16(a,p+8),method=le16(a,p+10),packed=le32(a,p+20),expanded=le32(a,p+24);
@@ -29,13 +29,29 @@ function preflight(a,limits={}){
   const name=new TextDecoder("utf-8").decode(a.subarray(p+46,p+46+nlen));
   if(!name||name.startsWith("/")||name.includes("\\")||name.includes("\0")||/^[A-Za-z]:/.test(name)||name.split("/").includes("..")||names.has(name))throw Error("Unsafe or duplicate ZIP entry path");
   names.add(name);
-  if(local+30>a.length||le32(a,local)!==0x04034b50)throw Error("ZIP local file header invalid");
+  if(local+30>a.length||local>=start||le32(a,local)!==0x04034b50)throw Error("ZIP local file header invalid");
+  // Central directory must agree with the local record before any decompression.
+  const localFlags=le16(a,local+6),localMethod=le16(a,local+8);
+  const localNameLen=le16(a,local+26),localExtraLen=le16(a,local+28);
+  const payloadAt=local+30+localNameLen+localExtraLen;
+  if(localFlags!==flags||localMethod!==method||localNameLen!==nlen||payloadAt>start)
+   throw Error("ZIP central/local header disagreement");
+  for(let j=0;j<nlen;j++)if(a[local+30+j]!==a[p+46+j])throw Error("ZIP filename differs from local header");
+  if(packed>start-payloadAt)throw Error("ZIP compressed entry overlaps central directory");
+  if((flags&8)===0){
+   if(le32(a,local+14)!==le32(a,p+16)||le32(a,local+18)!==packed||le32(a,local+22)!==expanded)
+    throw Error("ZIP central/local size or CRC disagreement");
+  }
+  ranges.push([local,payloadAt+packed]);
+
   if(expanded>maxEntry)throw Error("ZIP entry too large after decompression");
   if(expanded>0&&(packed===0||expanded/packed>maxRatio))throw Error("ZIP decompression ratio exceeds limit");
   total+=expanded;if(total>maxExpanded)throw Error("ZIP decompressed total exceeds safety budget");
   p+=46+nlen+extra+comment;
  }
  if(p!==start+size)throw Error("ZIP central directory size mismatch");
+ ranges.sort((a,b)=>a[0]-b[0]);
+ for(let i=1;i<ranges.length;i++)if(ranges[i][0]<ranges[i-1][1])throw Error("Overlapping ZIP local entries are unsupported");
  return {entries:count,expandedBytes:total,compressedBytes:a.length};
 }
 return {preflight};
