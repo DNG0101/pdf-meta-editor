@@ -18,6 +18,7 @@ test("HTML CDN response falls back to another provider with valid WASM",async()=
  const calls=[];
  const result=await Bridge.fetchCheckedWasm({
   urls:["https://broken.example/zeroperl.wasm","https://working.example/zeroperl.wasm"],
+  expectedSha256:null,
   fetchImpl:async url=>{
    calls.push(url);
    return url.includes("broken")?bad(html):reply(MAGIC);
@@ -31,6 +32,7 @@ test("HTML CDN response falls back to another provider with valid WASM",async()=
 test("HTML, network and 404 errors are disclosed rather than sent to WebAssembly.instantiate",async()=>{
  await assert.rejects(()=>Bridge.fetchCheckedWasm({
   urls:["https://bad.example","https://offline.example","https://missing.example"],
+  expectedSha256:null,
   fetchImpl:async url=>{
    if(url.includes("offline"))throw Error("Network offline");
    if(url.includes("missing"))return reply(html,{status:404});
@@ -47,6 +49,7 @@ test("HTML, network and 404 errors are disclosed rather than sent to WebAssembly
 test("WASM response wrapper supplies a real Response with correct MIME type and magic",async()=>{
  const response=await Bridge.checkedWasmResponse({
   urls:["https://wasm.example/runtime.wasm"],
+  expectedSha256:null,
   fetchImpl:async()=>reply(MAGIC)
  });
  assert.equal(response.headers.get("Content-Type"),"application/wasm");
@@ -57,6 +60,7 @@ test("WASM with valid prefix but corrupt module body is rejected",async()=>{
  const damaged=Uint8Array.from([...MAGIC,255,255,255,255]);
  await assert.rejects(()=>Bridge.fetchCheckedWasm({
   urls:["https://wasm.example/broken.wasm"],
+  expectedSha256:null,
   fetchImpl:async()=>reply(damaged)
  }),/WebAssembly\.validate rejected/);
 });
@@ -67,6 +71,7 @@ test("ExifTool wrapper actually receives custom binary loader and never fetches 
  const result=await Bridge.scan(provided,{
   wasmOptions:{
    urls:["https://fallback.example/zeroperl.wasm"],
+  expectedSha256:null,
    fetchImpl:async (url)=>{
     calls.push(url);
     return reply(MAGIC);
@@ -83,4 +88,15 @@ test("ExifTool wrapper actually receives custom binary loader and never fetches 
  });
  assert.deepEqual(calls,["https://fallback.example/zeroperl.wasm"]);
  assert.equal(result.fields.find(f=>f.name==="[EXIF]Make").value,"CameraCo");
+});
+
+test("The pinned runtime checksum matches the verified GitHub Actions network download",()=>{
+ assert.equal(Bridge.wasmSha256,"a6ae97f184fabc444b0b70d77c3d16475bfb3de16ebfb58ab8b2fbf98a53835e");
+});
+test("Wrong WASM checksum is not silently accepted",async()=>{
+ await assert.rejects(()=>Bridge.fetchCheckedWasm({
+  urls:["https://bad-checksum.example/zeroperl.wasm"],
+  expectedSha256:"0".repeat(64),
+  fetchImpl:async()=>reply(MAGIC)
+ }),/integrity mismatch/);
 });
