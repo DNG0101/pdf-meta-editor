@@ -89,13 +89,13 @@ function bmff(a,ctx,format){
      if(brands.length)ctx.add("Compatible brands",brands.join(", "),"BMFF ftyp","technical");
     }
    }else if(name==="mvhd"&&stop-begin>=20){
-    const version=a[begin],off=version===1?16:8;
-    if(stop-begin>=off+12){
+    const version=a[begin],off=version===1?20:12;
+    if(stop-begin>=off+(version===1?12:8)){
      const epoch=version===1?int64(a,begin+4):u32be(a,begin+4);
      const date=new Date((epoch-2082844800)*1000);
      if(!isNaN(date.getTime()))ctx.add("Creation date",date.toISOString(),"BMFF mvhd");
      const scale=u32be(a,begin+off);
-     const duration=version===1&&stop-begin>=off+12?int64(a,begin+off+4):u32be(a,begin+off+4);
+     const duration=version===1?int64(a,begin+off+4):u32be(a,begin+off+4);
      ctx.add("Time scale",scale,"BMFF mvhd","technical");
      if(scale)ctx.add("Movie duration",(duration/scale).toFixed(3)+" seconds","BMFF mvhd","technical");
     }
