@@ -20,10 +20,23 @@ Local-first, GitHub Pages compatible file metadata analysis and conservative rem
 | DOCX/XLSX/PPTX | Standard docProps and package relationships | Embedded objects/content are NOT sanitized; signed Office ZIP packages refused |
 | GIF | Comment and XMP application extension | Animation, looping, palettes, graphic controls and unknown application blocks preserved |
 | FLAC | Vorbis comments and embedded picture blocks | STREAMINFO, audio frames and other metadata blocks preserved |
-| TIFF, BMP, OGG, MP4/MOV, HEIC/AVIF, SVG, 7z, RAR, gzip, EXE/ELF | None | Signature-based inspection only, no content modification |
+| TIFF | None | Selected EXIF/TIFF IFD fields inspected; unknown tags, embedded profiles and MakerNotes may not be decoded |
+| BMP | None | DIB dimensions, bit depth, compression and selected color-profile properties inspected |
+| OGG | None | Bounded OpusTags and Vorbis-comment packet inspection; other codecs and unknown packets remain |
+| MP4/MOV, HEIC/AVIF | None | Selected ISO BMFF atoms, compatible brands, movie properties and iTunes-style metadata inspected; proprietary boxes/HEIF item metadata remain |
+| SVG | None | Inert-text attributes, title, description and metadata element inspection; no SVG rendering or sanitization |
+| 7z, RAR, gzip, EXE/ELF | None | Signature identification only; fields/removal unsupported |
 | Unknown formats and generic ZIP | None | Inspection-only, never falsely claim to be cleaned |
 
 Formats are detected using file magic and relevant package structure, not filenames alone.
+
+## Expanded inspection (v0.6.0)
+
+The universal inspector supports **read-only field discovery** in TIFF, BMP, OGG, MP4/MOV, HEIC/AVIF and SVG in addition to the existing cleanable formats. This is not universal metadata decoding: MP4/HEIF vendor atoms, Ogg packets, TIFF MakerNotes, executable metadata and other proprietary structures may remain uninterpreted. A file being detected does not imply it can be cleaned.
+
+The inspected fields display their source and type, support searching, and allow expanding long text values. The JSON report includes these parsed values, the format coverage warning, per-file counts and explicit limits. To keep hostile or extremely large files from exhausting browser memory, inspection is capped at **2,000 fields**, **128 KiB of text per field** and **2 MiB of cumulative extracted text**. Values exceeding these limits are marked incomplete, not silently certified. These are inspection limits and do not change the original file.
+
+Recognized GIF XMP packet text, application-extension IDs and limited opaque payload previews are now displayed where possible. The cleaner still only removes GIF comments and recognized XMP extensions. It intentionally does not remove arbitrary application extensions or try to erase invisible SynthID/content watermarks.
 
 ## Automatic inspection and GIF field visibility
 
@@ -38,7 +51,7 @@ The GIF cleaner removes only supported comment and XMP application extensions. I
 The universal interface now lists parsed field names, values and source containers per file, not just metadata-block counts. Its inspection coverage is **explicitly partial** and may not include every identifier in a file. Examples of fields available:
 
 - JPEG EXIF/TIFF: maker, camera model, orientation, timestamp, artist, GPS tag values and selected other TIFF tags; XMP preview and ICC/IPTC presence.
-- PNG: image dimensions and depth, tEXt, uncompressed iTXt, modification time, supported eXIf fields and ICC presence. Compressed zTXt/iTXt is reported as present but not decoded.
+- PNG: image dimensions and depth, tEXt, uncompressed iTXt, modification time, supported eXIf fields and ICC presence. Compressed zTXt/iTXt text is decoded when browser decompression is available, subject to a bounded text budget.
 - WebP: selected EXIF fields, XMP preview and ICC presence.
 - MP3: common ID3v2.3/v2.4 text frames, attached-image presence and ID3v1 values. Other ID3 features may not be decoded.
 - WAV: LIST/INFO values, channels, sample rate and recognized metadata-chunk presence.

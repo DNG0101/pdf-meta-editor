@@ -11,20 +11,27 @@ const le32=(a,p)=>(a[p]|a[p+1]<<8|a[p+2]<<16|a[p+3]<<24)>>>0;
 const be32=(a,p)=>((a[p]*16777216)+(a[p+1]<<16)+(a[p+2]<<8)+a[p+3])>>>0;
 const utf8=(a)=>new TextDecoder("utf-8",{fatal:false}).decode(a);
 const bytesPreview=(a)=>Array.from(a.subarray(0,24),x=>x.toString(16).padStart(2,"0")).join(" ");
-const label=(s)=>String(s).replace(/[\u0000-\u001f\u007f]/g," ").trim().slice(0,100);
+const label=(s)=>String(s).replace(/[\u0000-\u001f\u007f]/g," ").trim().slice(0,250);
 function inspect(a,name="",deps={}){
  if(!(a instanceof Uint8Array)||!a.length)throw Error("Nonempty Uint8Array required");
  const format=globalFormat(a,name);
  const fields=[],warnings=[],seen=new Set();
+ let valueBudget=2*1048576;
  function add(key,value,source,kind="metadata"){
-  if(fields.length>=400){if(!warnings.includes("Field display limited to 400 entries"))warnings.push("Field display limited to 400 entries");return;}
+  if(fields.length>=2000){if(!warnings.includes("Field inspection limited to 2000 entries"))warnings.push("Field inspection limited to 2000 entries");return;}
   if(value===undefined||value===null||value==="")return;
   let str=String(value).replace(/\u0000/g,"");
-  if(str.length>2048){str=str.slice(0,2048)+"… [truncated]";warnings.push("Some displayed values are truncated at 2048 characters");}
+  const originalChars=str.length;
+  const allowed=Math.min(131072,valueBudget);
+  if(str.length>allowed){
+   str=str.slice(0,allowed)+"… [truncated]";
+   if(!warnings.includes("Some extracted values were truncated by the 128 KiB per-field / 2 MiB total inspection budget"))warnings.push("Some extracted values were truncated by the 128 KiB per-field / 2 MiB total inspection budget");
+  }
+  valueBudget=Math.max(0,valueBudget-Math.min(originalChars,allowed));
   const title=label(key),id=source+":"+title+":"+str;
   if(seen.has(id))return;
   seen.add(id);
-  fields.push({name:title,value:str,source,kind});
+  fields.push({name:title,value:str,source,kind,complete:originalChars<=allowed,originalCharacters:originalChars});
  }
  const ctx={add,warnings};
  if(format==="jpeg")jpeg(a,ctx);
@@ -34,6 +41,8 @@ function inspect(a,name="",deps={}){
  else if(format==="wav")wav(a,ctx);
  else if(format==="gif")gif(a,ctx);
  else if(format==="flac")flac(a,ctx);
+ else if(format==="tiff")tiff(a,ctx,"TIFF");
+ else if(typeof FileMetaExtended!=="undefined"&&FileMetaExtended.inspect(a,format,ctx)){/* explicitly read-only extra formats */}
  else if(format==="pdf")return pdf(a,ctx,deps).then(()=>finish(format,fields,warnings));
  else if(format==="zip"&&/\.(docx|xlsx|pptx)$/i.test(name))return office(a,ctx,deps).then(k=>finish(k,fields,warnings));
  else warnings.push("No detailed metadata field parser for this format; file is not certified metadata-free.");
@@ -41,7 +50,7 @@ function inspect(a,name="",deps={}){
  return finish(format,fields,warnings);
 }
 function finish(format,fields,warnings){
- return {format,fields,warnings:[...new Set(warnings)],coverage:"Partial: selected known properties only",watermarkStatus:"Not assessed: embedded SynthID/invisible watermarks require a trusted content detector"};
+ return {format,fields,warnings:[...new Set(warnings)],coverage:"Partial: known fields and containers only; unsupported properties remain possible",fieldCounts:{metadata:fields.filter(f=>f.kind!=="technical").length,technical:fields.filter(f=>f.kind==="technical").length,truncated:fields.filter(f=>!f.complete).length},limits:{maxFields:2000,maxValueCharacters:131072,totalValueCharacters:2097152},watermarkStatus:"Not assessed: embedded SynthID/invisible watermarks require a trusted content detector"};
 }
 function globalFormat(a,name){
  const E=typeof FileMetaEngine!=="undefined"?FileMetaEngine:null;
@@ -276,11 +285,11 @@ function gif(a,ctx){
     if(p>=a.length)throw Error("Truncated GIF comment");
     const n=a[p++];if(!n)break;
     if(n>a.length-p)throw Error("Truncated GIF comment data");
-    if(size<4096)parts.push(a.subarray(p,p+Math.min(n,4096-size)));
+    if(size<131072)parts.push(a.subarray(p,p+Math.min(n,131072-size)));
     size+=n;p+=n;
    }
    comments++;
-   ctx.add("Comment "+comments,utf8(join(parts))+(size>4096?"… [truncated]":""),"GIF comment");
+   ctx.add("Comment "+comments,utf8(join(parts))+(size>131072?"… [truncated]":""),"GIF comment");
    continue;
   }
   if(p>=a.length)throw Error("Truncated GIF extension size");
@@ -296,12 +305,33 @@ function gif(a,ctx){
    p+=n;
    if(ext===0xff){
     applicationCount++;
-    if(app==="XMP DataXMP"){xmp++;ctx.add("XMP application extension","Present","GIF application");}
-    else if(app==="NETSCAPE2.0"||app==="ANIMEXTS1.0"){
+    if(app==="XMP DataXMP"){
+     xmp++;
+     const result=readGifData(a,p,131072);
+     const raw=result.data;
+     // Adobe GIF XMP trailer can be appended after the XML packet.
+     const packet=utf8(raw);
+     const endXML=Math.max(packet.lastIndexOf("</x:xmpmeta>")+12,packet.lastIndexOf("</rdf:RDF>")+10);
+     ctx.add("XMP packet "+xmp,(endXML>0?packet.slice(0,endXML):packet).replace(/\0+$/,""),"GIF XMP application");
+     if(result.truncated)ctx.warnings.push("GIF XMP packet truncated by 128 KiB inspection budget.");
+     p=result.next;
+    }else if(app==="NETSCAPE2.0"||app==="ANIMEXTS1.0"){
      if(p+5<=a.length&&a[p]===3&&a[p+1]===1&&a[p+4]===0)loopCount=a[p+2]|a[p+3]<<8;
-    }else otherApps.add(app||"Unnamed extension");
-   }else if(ext===0x01){plainText++;ctx.add("Plain text extension "+plainText,"Present; content is not decoded or removed","GIF plain text");}
-   p=skipSub(a,p);
+     p=skipSub(a,p);
+    }else{
+     otherApps.add(app||"Unnamed extension");
+     const result=readGifData(a,p,4096);
+     ctx.add("Application extension "+applicationCount,(app||"Unnamed")+" — "+result.length+" bytes; hex preview: "+hexPreview(result.data,64),"GIF application");
+     if(result.truncated)ctx.warnings.push("Some GIF application extension payloads were not fully displayed.");
+     p=result.next;
+    }
+   }else if(ext===0x01){
+    plainText++;
+    const result=readGifData(a,p,131072);
+    ctx.add("Plain text extension "+plainText,utf8(result.data),"GIF plain text");
+    if(result.truncated)ctx.warnings.push("GIF plain text extension truncated by inspection budget.");
+    p=result.next;
+   }else p=skipSub(a,p);
   }
  }
  if(!ended||!frames)throw Error("GIF missing frame data or trailer");
@@ -312,12 +342,23 @@ function gif(a,ctx){
  if(loopCount!==null)ctx.add("Animation loop count",loopCount===0?"Infinite":loopCount,"GIF application","technical");
  ctx.add("Application extensions",applicationCount,"GIF structure","technical");
  if(otherApps.size){
-  ctx.add("Unrecognized application extension IDs",Array.from(otherApps).slice(0,15).join(", "),"GIF application");
+  ctx.add("Unrecognized application extension IDs",Array.from(otherApps).join(", "),"GIF application");
   ctx.warnings.push("Unrecognized GIF application extensions are preserved and may contain additional metadata.");
  }
  if(plainText)ctx.warnings.push("GIF plain-text extensions are preserved by the cleaner and may contain user-visible information.");
  if(!comments&&!xmp)ctx.warnings.push("No removable GIF comment/XMP blocks detected. Technical properties are not removable personal metadata.");
  ctx.warnings.push("Declared frame delay does not predict exact browser playback timing; embedded content watermarks are not assessed.");
+}
+function hexPreview(a,limit=64){return Array.from(a.subarray(0,limit),n=>n.toString(16).padStart(2,"0")).join(" ")+(a.length>limit?" …":"");}
+function readGifData(a,p,max){
+ let length=0,parts=[],stored=0;
+ while(p<a.length){
+  const n=a[p++];if(n===0)return {next:p,length,data:join(parts),truncated:length>max};
+  if(n>a.length-p)throw Error("GIF application data truncated");
+  if(stored<max){const b=a.subarray(p,p+Math.min(n,max-stored));parts.push(b);stored+=b.length;}
+  length+=n;p+=n;
+ }
+ throw Error("GIF application data not terminated");
 }
 function skipSub(a,p){while(p<a.length){const n=a[p++];if(!n)return p;if(n>a.length-p)throw Error("Truncated GIF sub-block");p+=n;}throw Error("Unterminated GIF sub-blocks");}
 function join(parts){const n=parts.reduce((x,p)=>x+p.length,0),out=new Uint8Array(n);let at=0;for(const p of parts){out.set(p,at);at+=p.length;}return out;}

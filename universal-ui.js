@@ -31,8 +31,8 @@ shell.innerHTML=[
 '<div class="u-toolbar"><button class="u-button primary" id="u-inspect" disabled>Inspect files</button><button class="u-button" id="u-clean" disabled>Remove supported metadata & download</button><button class="u-button" id="u-cancel" disabled>Cancel after current file</button><button class="u-button" id="u-report" disabled>Export JSON report</button><button class="u-button" id="u-clear">Clear</button></div>',
 '<p class="u-note"><strong>Limits:</strong> Format-aware cleanup does not prove absence of all metadata, invisible watermarks, or SynthID. Existing signatures are protected; keep the original file. No file is sent to a backend.</p>',
 '<p class="u-note" id="u-progress" role="status" aria-live="polite">Select files to begin.</p>',
-'<section class="u-panel"><h3>File inspection and cleaning</h3><div style="overflow-x:auto"><table class="u-table"><thead><tr><th>File</th><th>Format</th><th>Known metadata blocks</th><th>Status</th></tr></thead><tbody id="u-rows"></tbody></table></div></section>',
-'<section class="u-panel"><h3>Extracted metadata fields</h3><div class="u-note" style="padding:10px 16px">Expand a file to view parsed metadata names, values and source structures. Coverage is partial; compressed or unknown metadata may remain.</div><div id="u-fields"></div></section>',
+'<section class="u-panel"><h3>File inspection and cleaning</h3><div style="overflow-x:auto"><table class="u-table"><thead><tr><th>File</th><th>Format</th><th>Removable blocks detected</th><th>Status</th></tr></thead><tbody id="u-rows"></tbody></table></div></section>',
+'<section class="u-panel"><h3>Extracted metadata fields</h3><div class="u-note" style="padding:10px 16px">Expand a file to view parsed metadata names, values and source structures. Coverage is partial; compressed or unknown metadata may remain.</div><div style="padding:0 16px 12px"><label for="u-filter" class="u-note">Search all extracted fields</label><input id="u-filter" type="search" placeholder="Search metadata, technical values or source..." style="width:100%;padding:10px;border:1px solid #a5b8cf;border-radius:8px" /></div><div id="u-fields"></div></section>',
 '<section class="u-panel"><h3>Detailed results & warnings</h3><pre class="u-report" id="u-details">No files selected.</pre></section>'
 ].join("");
 header.parentNode.insertBefore(shell,main);main.style.display="none";
@@ -63,12 +63,21 @@ function refresh(){
  $("u-inspect").disabled=busy||!selected.length;$("u-clean").disabled=busy||!selected.length;$("u-report").disabled=busy||!results.length;$("u-clear").disabled=busy;$("u-cancel").disabled=!busy||cancelRequested;
  $("u-rows").innerHTML=results.length?results.map(r=>'<tr><td>'+esc(r.name)+'<div class="u-note">'+(r.size/1048576).toFixed(2)+' MiB</div></td><td>'+esc(r.format)+'</td><td>'+esc(r.count)+'</td><td><span class="u-status '+(r.status==="Known tags rechecked"?"ok":(r.status.startsWith("Error")||r.status.startsWith("Unsupported")?"error":""))+'">'+esc(r.status)+'</span></td></tr>').join(""):'<tr><td colspan="4">No files selected</td></tr>';
  $("u-fields").innerHTML=results.length?results.map((r,i)=>{
-  const fields=r.metadataFields||[],warnings=r.metadataWarnings||[],diff=r.metadataDiff;
+  const filter=$("u-filter").value.trim().toLowerCase();
+  const allFields=r.metadataFields||[];
+  const fields=filter?allFields.filter(f=>[f.name,f.value,f.source,f.kind].some(v=>String(v||"").toLowerCase().includes(filter))):allFields;
+  const warnings=r.metadataWarnings||[],diff=r.metadataDiff;
   const meta=fields.filter(f=>f.kind!=="technical"),technical=fields.filter(f=>f.kind==="technical");
-  const rowHtml=fields.map(f=>'<tr><th scope="row">'+esc(f.name)+'</th><td>'+esc(f.value)+'</td><td>'+esc(f.source)+'</td><td>'+(f.kind==="technical"?"Technical":"Metadata")+'</td></tr>').join("");
+  const rowHtml=fields.map(f=>{
+   const value=String(f.value||""),short=value.length>450;
+   const view=short?esc(value.slice(0,450))+'… <details><summary>Show full inspected value ('+value.length+' characters)</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;overflow:auto">'+esc(value)+'</pre></details>':esc(value);
+   return '<tr><th scope="row">'+esc(f.name)+'</th><td>'+view+(f.complete===false?'<div class="u-warning">Value incomplete: inspection safety limit reached</div>':'')+'</td><td>'+esc(f.source)+'</td><td>'+(f.kind==="technical"?"Technical":"Metadata")+'</td></tr>';
+  }).join("");
   const warningHtml=warnings.map(w=>'<div class="u-warning">'+esc(w)+'</div>').join("");
   return '<details class="u-fields" '+(results.length===1?'open':'')+'><summary>'+esc(r.name)+' — '+meta.length+' metadata field(s), '+technical.length+' technical property/properties · '+esc(r.format)+' · '+esc(r.status)+'</summary>'+
   (r.status==="Queued for inspection"||r.status==="Inspecting"?'<p class="u-note">Inspection is starting automatically. Metadata results are not ready yet.</p>':'')+
+  (r.metadataCoverage?'<p class="u-note">Coverage: '+esc(r.metadataCoverage)+' · '+esc(r.metadataFieldCounts?.truncated||0)+' capped field(s)</p>':'')+
+  (filter?'<p class="u-note">Showing '+fields.length+' of '+allFields.length+' extracted fields</p>':'')+
   (fields.length?'<table><thead><tr><th>Field</th><th>Value</th><th>Source</th><th>Category</th></tr></thead><tbody>'+rowHtml+'</tbody></table>':(r.status==="Queued for inspection"||r.status==="Inspecting"?'':'<p class="u-note">No fields were extracted by the available parsers. This does not prove metadata absence.</p>'))+
   (technical.length&&!meta.length?'<p class="u-note">No recognized metadata tag values found. The technical details above describe the file and are not evidence that all metadata is absent.</p>':'')+
   (diff?'<h4>Before / after metadata</h4><p class="u-note">Extracted fields removed: '+diff.removed.length+' · Retained: '+diff.retained.length+' · New: '+diff.added.length+'</p>'+
@@ -97,16 +106,19 @@ async function run(clean){
   const r=results[i];r.status=clean?"Cleaning":"Inspecting";$("u-progress").textContent=(i+1)+"/"+results.length+": "+r.name;refresh();
   try{
    const data=await bytesOf(r);
-   const out=await FileMetaEngine.process(data,r.name,{remove:clean,zipLib,pdfLib});
    if(typeof FileMetaInspector==="undefined"||typeof FileMetaVerifier==="undefined")throw Error("Metadata inspector/verifier unavailable; refusing to certify results");
    const inspected=await FileMetaInspector.inspect(data,r.name,{zipLib,pdfLib});
    r.metadataFields=inspected.fields;
    r.metadataWarnings=inspected.warnings;
    r.metadataCoverage=inspected.coverage;
+   r.metadataFieldCounts=inspected.fieldCounts;
+   r.metadataLimits=inspected.limits;
+   r.format=inspected.format;refresh();
+   const out=await FileMetaEngine.process(data,r.name,{remove:clean,zipLib,pdfLib});
    r.format=out.format;r.count=out.count;r.notes=out.notes||[];r.removed=out.removed;r.verification=out.verification;
    r.sha256=await hash(data);
    r.synthIdDetection="Not assessed: no trusted content watermark detector is integrated";
-   if(!out.supported){r.status="Unsupported / inspect only";refresh();continue;}
+   if(!out.supported){r.status="Unsupported / inspect only";r.count="Not supported";refresh();continue;}
    if(clean&&out.changed){
     const recheck=await FileMetaEngine.process(out.bytes,r.name,{remove:false,zipLib,pdfLib});
     if(!recheck.supported||recheck.count!==0)throw Error("Post-clean validation failed; refusing download");
@@ -152,11 +164,12 @@ async function run(clean){
  }
  busy=false;$("u-progress").textContent=(clean?"Cleanup finished. ":"Inspection finished. ")+results.filter(r=>r.status==="Known tags rechecked").length+" rechecked file(s) with selected metadata removed."+packageError;refresh();
 }
+$("u-filter").oninput=()=>refresh();
 $("u-inspect").onclick=()=>run(false);
 $("u-clean").onclick=()=>run(true);
 $("u-cancel").onclick=()=>{if(busy){cancelRequested=true;$("u-progress").textContent="Cancellation requested; current operation will finish first.";refresh();}};
 $("u-report").onclick=()=>{
- const doc={tool:"Local File Metadata Inspector",generatedAt:new Date().toISOString(),warning:"The field listing and cleanup cover only documented parser capabilities; unknown/internal metadata may remain. SynthID and invisible watermarks are NOT assessed and cannot be certified absent.",files:results.map(({file,...r})=>r)};
+ const doc={tool:"Local File Metadata Inspector",generatedAt:new Date().toISOString(),scope:"Parsed fields and verification evidence, subject to explicit safety limits",warning:"The field listing and cleanup cover only documented parser capabilities; unknown/internal metadata may remain. SynthID and invisible watermarks are NOT assessed and cannot be certified absent.",files:results.map(({file,...r})=>r)};
  download(new TextEncoder().encode(JSON.stringify(doc,null,2)),"metadata-report.json","application/json");
 };
 $("u-clear").onclick=()=>{selectionVersion++;selected=[];results=[];input.value="";$("u-progress").textContent="Selection cleared.";refresh();};

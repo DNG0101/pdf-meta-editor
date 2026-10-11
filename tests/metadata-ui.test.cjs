@@ -21,7 +21,7 @@ test("Universal UI displays true parsed metadata values with HTML escaping and c
  try{
   w.TextDecoder=TextDecoder;w.TextEncoder=TextEncoder;
   Object.defineProperty(w.crypto,"subtle",{configurable:true,value:{digest:async()=>new ArrayBuffer(32)}});
-  for(const script of ["zip-guard.js","formats-extra.js","universal-engine.js","metadata-inspector.js","content-verifier.js","universal-ui.js"])w.eval(read(script));
+  for(const script of ["zip-guard.js","formats-extra.js","universal-engine.js","metadata-extended.js","metadata-inspector.js","content-verifier.js","universal-ui.js"])w.eval(read(script));
   const bytes=fixture();
   const input=d.getElementById("u-files");
   Object.defineProperty(input,"files",{configurable:true,value:[{name:"photo.png",size:bytes.length,arrayBuffer:async()=>bytes.buffer.slice(0)}]});
