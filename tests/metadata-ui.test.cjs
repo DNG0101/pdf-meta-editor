@@ -43,6 +43,11 @@ test("Universal UI displays true parsed metadata values with HTML escaping and c
   assert.equal(report[0].status,"Known tags rechecked");
   assert.ok(report[0].metadataFields.some(x=>x.name==="Author"));
   assert.ok(!report[0].remainingFields.some(x=>x.name==="Author"));
+  assert.equal(report[0].metadataDiff.removed.filter(f=>f.name==="Author").length,1);
+  assert.match(d.getElementById("u-fields").textContent,/Cleaned output/);
+  assert.match(d.getElementById("u-fields").textContent,/Showing fields detected in the cleaned output/);
+  const remainingTable=d.getElementById("u-fields").querySelector(".u-fields table");
+  if(remainingTable)assert.doesNotMatch(remainingTable.textContent,/Author/,"Removed author must not remain in cleaned-output table");
   assert.match(report[0].synthIdDetection,/Not assessed/);
  }finally{dom.window.close();}
 });

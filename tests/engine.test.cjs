@@ -27,12 +27,13 @@ test("JPEG detection and safe APP1 removal",()=>{
 test("PNG textual metadata removal without touching pixel chunk",()=>{
  const head=u([137,80,78,71,13,10,26,10]);
  const img=pngChunk("IDAT",u([1,2,3]));
- const input=cat(head,pngChunk("tEXt",ascii("a=b")),img,pngChunk("IEND",u([])));
+ const ihdr=pngChunk("IHDR",cat(be(3),be(2),u([8,2,0,0,0])));
+ const input=cat(head,ihdr,pngChunk("tEXt",ascii("a=b")),img,pngChunk("IEND",u([])));
  const cleaned=E.binary(input,true);
  assert.equal(cleaned.count,1);assert.equal(E.binary(cleaned.bytes,false).count,0);
  assert.equal(E.binary(cleaned.bytes,false).format,"png");
  assert.ok(cleaned.bytes.length<input.length);
- assert.deepEqual([...cleaned.bytes.slice(8,8+img.length)],[...img]);
+ assert.deepEqual([...cleaned.bytes.slice(8+ihdr.length,8+ihdr.length+img.length)],[...img]);
 });
 test("WebP XMP removal and extended header flag repair",()=>{
  const vp8x=chunk("VP8X",u([12,0,0,0,1,0,0,1,0,0]));
@@ -55,7 +56,7 @@ test("WAV LIST INFO removal while preserving audio bytes",()=>{
 });
 test("MP3 ID3v2 and ID3v1 removal",()=>{
  const tag=cat(ascii("TAG"),new Uint8Array(125));
- const audio=u([255,251,8,9]);
+ const audio=u([255,251,144,0]);
  const mp3=cat(ascii("ID3"),u([4,0,0,0,0,0,0]),audio,tag);
  const c=E.binary(mp3,true);
  assert.equal(c.count,2);assert.deepEqual([...c.bytes],[...audio]);

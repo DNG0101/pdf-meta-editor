@@ -52,7 +52,11 @@ function setFiles(fs){
  if(busy){$("u-progress").textContent="Finish or cancel the active operation before selecting different files.";return;}
  const version=++selectionVersion;
  selected=fs.slice(0,100);
- results=selected.map(f=>({file:f,name:f.name,size:f.size,format:"Detecting",count:"—",status:"Queued for inspection",notes:[]}));
+ results=selected.map(f=>({
+ file:f,name:f.name,size:f.size,
+ fileProperties:{sizeBytes:f.size,reportedMimeType:f.type||"Not supplied by browser",lastModified:f.lastModified?new Date(f.lastModified).toISOString():"Not supplied by browser"},
+ format:"Detecting",count:"—",status:"Queued for inspection",notes:[]
+}));
  $("u-progress").textContent=selected.length+" file(s) selected. Starting automatic inspection…"+(fs.length>100?" Maximum first 100 accepted.":"");
  refresh();
  // Defer one microtask so the queued state can render before inspection begins.
@@ -64,19 +68,20 @@ function refresh(){
  $("u-rows").innerHTML=results.length?results.map(r=>'<tr><td>'+esc(r.name)+'<div class="u-note">'+(r.size/1048576).toFixed(2)+' MiB</div></td><td>'+esc(r.format)+'</td><td>'+esc(r.count)+'</td><td><span class="u-status '+(r.status==="Known tags rechecked"?"ok":(r.status.startsWith("Error")||r.status.startsWith("Unsupported")?"error":""))+'">'+esc(r.status)+'</span></td></tr>').join(""):'<tr><td colspan="4">No files selected</td></tr>';
  $("u-fields").innerHTML=results.length?results.map((r,i)=>{
   const filter=$("u-filter").value.trim().toLowerCase();
-  const allFields=r.metadataFields||[];
+  const viewingOutput=r.status==="Known tags rechecked"&&Array.isArray(r.remainingFields);
+  const allFields=viewingOutput?r.remainingFields:(r.metadataFields||[]);
   const fields=filter?allFields.filter(f=>[f.name,f.value,f.source,f.kind].some(v=>String(v||"").toLowerCase().includes(filter))):allFields;
-  const warnings=r.metadataWarnings||[],diff=r.metadataDiff;
-  const meta=fields.filter(f=>f.kind!=="technical"),technical=fields.filter(f=>f.kind==="technical");
+  const warnings=(viewingOutput?r.remainingFieldWarnings:r.metadataWarnings)||[],diff=r.metadataDiff;
+  const meta=allFields.filter(f=>f.kind!=="technical"),technical=allFields.filter(f=>f.kind==="technical");
   const rowHtml=fields.map(f=>{
    const value=String(f.value||""),short=value.length>450;
    const view=short?esc(value.slice(0,450))+'… <details><summary>Show full inspected value ('+value.length+' characters)</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;overflow:auto">'+esc(value)+'</pre></details>':esc(value);
    return '<tr><th scope="row">'+esc(f.name)+'</th><td>'+view+(f.complete===false?'<div class="u-warning">Value incomplete: inspection safety limit reached</div>':'')+'</td><td>'+esc(f.source)+'</td><td>'+(f.kind==="technical"?"Technical":"Metadata")+'</td></tr>';
   }).join("");
   const warningHtml=warnings.map(w=>'<div class="u-warning">'+esc(w)+'</div>').join("");
-  return '<details class="u-fields" '+(results.length===1?'open':'')+'><summary>'+esc(r.name)+' — '+meta.length+' metadata field(s), '+technical.length+' technical property/properties · '+esc(r.format)+' · '+esc(r.status)+'</summary>'+
+  return '<details class="u-fields" '+(results.length===1?'open':'')+'><summary>'+esc(r.name)+' — '+meta.length+' metadata field(s), '+technical.length+' technical property/properties · '+esc(r.format)+' · '+esc(r.status)+(viewingOutput?' · Cleaned output':'')+'</summary>'+
   (r.status==="Queued for inspection"||r.status==="Inspecting"?'<p class="u-note">Inspection is starting automatically. Metadata results are not ready yet.</p>':'')+
-  (r.metadataCoverage?'<p class="u-note">Coverage: '+esc(r.metadataCoverage)+' · '+esc(r.metadataFieldCounts?.truncated||0)+' capped field(s)</p>':'')+
+  (r.metadataCoverage?'<p class="u-note">Coverage: '+esc(r.metadataCoverage)+' · '+esc((viewingOutput?r.remainingFieldCounts:r.metadataFieldCounts)?.truncated||0)+' capped field(s). '+(viewingOutput?'Showing fields detected in the cleaned output, not original metadata.':'')+'</p>':'')+
   (filter?'<p class="u-note">Showing '+fields.length+' of '+allFields.length+' extracted fields</p>':'')+
   (fields.length?'<table><thead><tr><th>Field</th><th>Value</th><th>Source</th><th>Category</th></tr></thead><tbody>'+rowHtml+'</tbody></table>':(r.status==="Queued for inspection"||r.status==="Inspecting"?'':'<p class="u-note">No fields were extracted by the available parsers. This does not prove metadata absence.</p>'))+
   (technical.length&&!meta.length?'<p class="u-note">No recognized metadata tag values found. The technical details above describe the file and are not evidence that all metadata is absent.</p>':'')+
@@ -88,7 +93,15 @@ function refresh(){
  $("u-details").textContent=JSON.stringify(results.map(({file,...data})=>data),null,2);
 }
 async function bytesOf(r){if(r.size>maxBytes)throw Error("File exceeds 256 MiB browser safety limit");if(!r.size)throw Error("Empty file");return new Uint8Array(await r.file.arrayBuffer());}
-async function hash(a){if(a.length>32*1024*1024)return "Skipped for large file";const h=await crypto.subtle.digest("SHA-256",a);return Array.from(new Uint8Array(h),v=>v.toString(16).padStart(2,"0")).join("");}
+async function hash(a){
+ if(a.length>32*1024*1024)return "Skipped for large file (>32 MiB)";
+ if(typeof crypto==="undefined"||!crypto.subtle||typeof crypto.subtle.digest!=="function")
+  return "Unavailable: browser secure context required";
+ try{
+  const h=await crypto.subtle.digest("SHA-256",a);
+  return Array.from(new Uint8Array(h),v=>v.toString(16).padStart(2,"0")).join("");
+ }catch(e){return "Unavailable: browser hashing failed";}
+}
 function download(bytes,name,type){const url=URL.createObjectURL(new Blob([bytes],{type:type||"application/octet-stream"}));const link=document.createElement("a");link.href=url;link.download=name;document.body.appendChild(link);link.click();setTimeout(()=>{URL.revokeObjectURL(url);link.remove();},20000);}
 async function run(clean){
  if(busy)return;
@@ -133,14 +146,23 @@ async function run(clean){
      if(beforeField&&(!afterField||afterField.value!==beforeField.value))throw Error("Output structural property changed: "+key);
     }
     r.remainingFields=after.fields;r.remainingFieldWarnings=after.warnings;
+    r.remainingFieldCounts=after.fieldCounts;
     const originalFields=inspected.fields;
-    const originalSet=new Set(originalFields.map(f=>JSON.stringify([f.name,f.value,f.source])));
-    const remainingSet=new Set(after.fields.map(f=>JSON.stringify([f.name,f.value,f.source])));
-    r.metadataDiff={
-     removed:originalFields.filter(f=>!remainingSet.has(JSON.stringify([f.name,f.value,f.source]))),
-     retained:originalFields.filter(f=>remainingSet.has(JSON.stringify([f.name,f.value,f.source]))),
-     added:after.fields.filter(f=>!originalSet.has(JSON.stringify([f.name,f.value,f.source])))
-    };
+    const fieldKey=f=>JSON.stringify([f.name,f.value,f.source,f.kind]);
+    // Compare occurrences, not sets: identical repeated tags are distinct.
+    const remainingCounts=new Map(),originalCounts=new Map();
+    for(const f of after.fields){const k=fieldKey(f);remainingCounts.set(k,(remainingCounts.get(k)||0)+1);}
+    for(const f of originalFields){const k=fieldKey(f);originalCounts.set(k,(originalCounts.get(k)||0)+1);}
+    const removed=[],retained=[],added=[];
+    for(const f of originalFields){
+     const k=fieldKey(f),n=remainingCounts.get(k)||0;
+     if(n){retained.push(f);remainingCounts.set(k,n-1);}else removed.push(f);
+    }
+    for(const f of after.fields){
+     const k=fieldKey(f),n=originalCounts.get(k)||0;
+     if(n)originalCounts.set(k,n-1);else added.push(f);
+    }
+    r.metadataDiff={removed,retained,added};
     r.status="Known tags rechecked";r.changed=true;r.outputSize=out.bytes.length;
     r.verification="Known removable blocks absent, retained content "+integrity.level+" and selected structure rechecked; hidden metadata and SynthID NOT certified absent";
     r.outputSha256=await hash(out.bytes);
@@ -151,7 +173,17 @@ async function run(clean){
     usedOutputNames.add(fileName);
     outputs.push({filename:fileName,bytes:out.bytes});
    }else r.status=clean?"No known removable blocks":"Inspected";
-  }catch(e){r.status="Error: "+(e.message||String(e));r.notes=[r.status];}
+  }catch(e){
+    r.status="Error: "+(e.message||String(e));
+    r.notes=[r.status];
+    if(r.format==="Detecting"||r.format==="Pending"){
+      try{
+        let detected=FileMetaEngine.identify(new Uint8Array(await r.file.slice(0,4096).arrayBuffer()),r.name);
+        if(detected==="unknown"&&typeof FileMetaExtraFormats!=="undefined")detected=FileMetaExtraFormats.identify(new Uint8Array(await r.file.slice(0,4096).arrayBuffer()))||detected;
+        r.format=detected;
+      }catch(_){r.format="Unknown";}
+    }
+  }
   refresh();
  }
  let packageError="";
@@ -162,7 +194,15 @@ async function run(clean){
    else packageError=" Batch ZIP unavailable (JSZip missing).";
   }catch(e){packageError=" Export failed: "+(e.message||e);}
  }
- busy=false;$("u-progress").textContent=(clean?"Cleanup finished. ":"Inspection finished. ")+results.filter(r=>r.status==="Known tags rechecked").length+" rechecked file(s) with selected metadata removed."+packageError;refresh();
+ busy=false;
+ const failures=results.filter(r=>r.status.startsWith("Error")).length;
+ const unsupported=results.filter(r=>r.status.startsWith("Unsupported")).length;
+ const cleaned=results.filter(r=>r.status==="Known tags rechecked").length;
+ const inspected=results.filter(r=>r.status==="Inspected"||r.status==="No known removable blocks").length;
+ $("u-progress").textContent=(clean?"Cleanup finished. ":"Inspection finished. ")+
+ inspected+" inspected without changes, "+cleaned+" cleaned and verified, "+unsupported+" read-only/unsupported, "+
+ failures+" error(s)."+packageError;
+ refresh();
 }
 $("u-filter").oninput=()=>refresh();
 $("u-inspect").onclick=()=>run(false);
