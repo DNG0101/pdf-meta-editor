@@ -99,8 +99,8 @@ test("DOCX inspector reads creator from docProps, then cleans it",async()=>{
  assert.equal(after.fields.some(f=>f.name==="creator"),false);
 });
 test("Malformed EXIF offsets fail instead of inventing data",async()=>{
- const jpeg=jpegExif();jpeg[35]=255;
- await assert.rejects(()=>I.inspect(jpeg,"bad.jpg"),/EXIF/);
+ const jpeg=jpegExif();jpeg[30]=255; // corrupt TIFF Make offset (byte 0 of LE uint32)
+ assert.throws(()=>I.inspect(jpeg,"bad.jpg"),/EXIF/);
 });
 test("Unrecognized files never claim universal inspection or invisible watermark checks",async()=>{
  const info=await I.inspect(text("hello, world"),"any.bin");
