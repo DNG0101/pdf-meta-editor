@@ -36,7 +36,7 @@ test("FLAC metadata removed while audio payload is byte-preserved",async()=>{
  assert.equal((await E.process(clean.bytes,"audio.flac")).count,0);
 });
 test("FLAC invalid STREAMINFO cannot be rewritten",()=>{
- assert.throws(()=>X.flac(bytes(str("fLaC"),[0x80,0,0,34],Array(34).fill(0),[255,248]),true),/Invalid|Incomplete|missing/);
+ assert.throws(()=>X.flac(bytes(str("fLaC"),[0x81,0,0,34],Array(34).fill(0),[255,248]),true),/Invalid|Incomplete|missing/);
 });
 test("Read-only formats are detected but never marked cleaned",async()=>{
  const cases=[
