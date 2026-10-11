@@ -16,7 +16,7 @@ function inspect(a,name="",deps={}){
  if(!(a instanceof Uint8Array)||!a.length)throw Error("Nonempty Uint8Array required");
  const format=globalFormat(a,name);
  const fields=[],warnings=[],seen=new Set();
- function add(key,value,source){
+ function add(key,value,source,kind="metadata"){
   if(fields.length>=400){if(!warnings.includes("Field display limited to 400 entries"))warnings.push("Field display limited to 400 entries");return;}
   if(value===undefined||value===null||value==="")return;
   let str=String(value).replace(/\u0000/g,"");
@@ -24,7 +24,7 @@ function inspect(a,name="",deps={}){
   const title=label(key),id=source+":"+title+":"+str;
   if(seen.has(id))return;
   seen.add(id);
-  fields.push({name:title,value:str,source});
+  fields.push({name:title,value:str,source,kind});
  }
  const ctx={add,warnings};
  if(format==="jpeg")jpeg(a,ctx);
@@ -228,16 +228,96 @@ function wav(a,ctx){
  }
 }
 function gif(a,ctx){
- let p=13+((a[10]&0x80)?3*(1<<((a[10]&7)+1)):0);
+ if(a.length<14||!["GIF87a","GIF89a"].includes(ascii(a,0,6)))throw Error("Truncated or invalid GIF header");
+ const width=a[6]|a[7]<<8,height=a[8]|a[9]<<8,flags=a[10];
+ if(!width||!height)throw Error("GIF canvas dimensions must be nonzero");
+ let p=13+((flags&0x80)?3*(1<<((flags&7)+1)):0);
+ if(p>a.length)throw Error("Truncated GIF global color table");
+ ctx.add("Version",ascii(a,0,6),"GIF logical screen","technical");
+ ctx.add("Width",width,"GIF logical screen","technical");
+ ctx.add("Height",height,"GIF logical screen","technical");
+ ctx.add("Global palette colors",(flags&0x80)?1<<((flags&7)+1):"No global palette","GIF logical screen","technical");
+ ctx.add("Background color index",a[11],"GIF logical screen","technical");
+ if(a[12])ctx.add("Pixel aspect ratio",((a[12]+15)/64).toFixed(3),"GIF logical screen","technical");
+ let frames=0,delayCs=0,transparency=0,comments=0,plainText=0,xmp=0;
+ let gceDelay=0,gceTransparency=false,applicationCount=0,loopCount=null,ended=false,steps=0;
+ const otherApps=new Set();
  while(p<a.length){
-  const type=a[p++];if(type===0x3b)break;
-  if(type===0x2c){if(p+9>a.length)break;const flags=a[p+8];p+=9+((flags&0x80)?3*(1<<((flags&7)+1)):0);p++;p=skipSub(a,p);continue;}
-  if(type!==0x21||p>=a.length)break;
-  const ext=a[p++];if(ext===0xfe){
-   let parts=[],size=0;while(p<a.length){const n=a[p++];if(!n)break;if(n>a.length-p)throw Error("GIF comment truncated");if(size<4096)parts.push(a.subarray(p,p+n));size+=n;p+=n;}
-   ctx.add("Comment",utf8(parts.length?join(parts):new Uint8Array()),"GIF comment");
-  }else {if(p>=a.length)break;const n=a[p++];const app=ext===0xff?ascii(a,p,n):"";p+=n;p=skipSub(a,p);if(app==="XMP DataXMP")ctx.add("XMP packet","Present","GIF application");}
+  if(++steps>500000)throw Error("Excessive GIF blocks");
+  const kind=a[p++];
+  if(kind===0x3b){
+   if(p!==a.length)throw Error("Unexpected trailing bytes after GIF trailer");
+   ended=true;break;
+  }
+  if(kind===0x2c){
+   if(p+9>a.length)throw Error("Truncated GIF image descriptor");
+   const left=a[p]|a[p+1]<<8,top=a[p+2]|a[p+3]<<8;
+   const fw=a[p+4]|a[p+5]<<8,fh=a[p+6]|a[p+7]<<8;
+   if(!fw||!fh)throw Error("GIF frame dimensions must be nonzero");
+   const f=a[p+8];p+=9;
+   if(f&0x80){
+    const palette=3*(1<<((f&7)+1));
+    if(palette>a.length-p)throw Error("Truncated GIF local color table");
+    p+=palette;
+   }
+   if(p>=a.length)throw Error("Truncated GIF image data");
+   p++;p=skipSub(a,p);
+   frames++;delayCs+=gceDelay;
+   if(gceTransparency)transparency++;
+   if(frames<=5)ctx.add("Frame "+frames+" geometry",fw+" × "+fh+" at "+left+","+top,"GIF image descriptor","technical");
+   gceDelay=0;gceTransparency=false;
+   continue;
+  }
+  if(kind!==0x21||p>=a.length)throw Error("Invalid GIF extension block");
+  const ext=a[p++];
+  if(ext===0xfe){
+   let parts=[],size=0;
+   while(true){
+    if(p>=a.length)throw Error("Truncated GIF comment");
+    const n=a[p++];if(!n)break;
+    if(n>a.length-p)throw Error("Truncated GIF comment data");
+    if(size<4096)parts.push(a.subarray(p,p+Math.min(n,4096-size)));
+    size+=n;p+=n;
+   }
+   comments++;
+   ctx.add("Comment "+comments,utf8(join(parts))+(size>4096?"… [truncated]":""),"GIF comment");
+   continue;
+  }
+  if(p>=a.length)throw Error("Truncated GIF extension size");
+  const n=a[p++];
+  if(n>a.length-p)throw Error("Invalid GIF extension block size");
+  const app=ext===0xff?ascii(a,p,n):"";
+  if(ext===0xf9){
+   if(n!==4||p+5>a.length||a[p+4]!==0)throw Error("Invalid GIF graphic control block");
+   gceTransparency=!!(a[p]&1);
+   gceDelay=a[p+1]|a[p+2]<<8;
+   p+=5;
+  }else{
+   p+=n;
+   if(ext===0xff){
+    applicationCount++;
+    if(app==="XMP DataXMP"){xmp++;ctx.add("XMP application extension","Present","GIF application");}
+    else if(app==="NETSCAPE2.0"||app==="ANIMEXTS1.0"){
+     if(p+5<=a.length&&a[p]===3&&a[p+1]===1&&a[p+4]===0)loopCount=a[p+2]|a[p+3]<<8;
+    }else otherApps.add(app||"Unnamed extension");
+   }else if(ext===0x01){plainText++;ctx.add("Plain text extension "+plainText,"Present; content is not decoded or removed","GIF plain text");}
+   p=skipSub(a,p);
+  }
  }
+ if(!ended||!frames)throw Error("GIF missing frame data or trailer");
+ ctx.add("Frame count",frames,"GIF animation","technical");
+ ctx.add("Animated",frames>1?"Yes":"No","GIF animation","technical");
+ ctx.add("Total frame delay",(delayCs/100).toFixed(2)+" seconds (declared)","GIF animation","technical");
+ ctx.add("Frames with transparency",transparency,"GIF animation","technical");
+ if(loopCount!==null)ctx.add("Animation loop count",loopCount===0?"Infinite":loopCount,"GIF application","technical");
+ ctx.add("Application extensions",applicationCount,"GIF structure","technical");
+ if(otherApps.size){
+  ctx.add("Unrecognized application extension IDs",Array.from(otherApps).slice(0,15).join(", "),"GIF application");
+  ctx.warnings.push("Unrecognized GIF application extensions are preserved and may contain additional metadata.");
+ }
+ if(plainText)ctx.warnings.push("GIF plain-text extensions are preserved by the cleaner and may contain user-visible information.");
+ if(!comments&&!xmp)ctx.warnings.push("No removable GIF comment/XMP blocks detected. Technical properties are not removable personal metadata.");
+ ctx.warnings.push("Declared frame delay does not predict exact browser playback timing; embedded content watermarks are not assessed.");
 }
 function skipSub(a,p){while(p<a.length){const n=a[p++];if(!n)return p;if(n>a.length-p)throw Error("Truncated GIF sub-block");p+=n;}throw Error("Unterminated GIF sub-blocks");}
 function join(parts){const n=parts.reduce((x,p)=>x+p.length,0),out=new Uint8Array(n);let at=0;for(const p of parts){out.set(p,at);at+=p.length;}return out;}

@@ -37,7 +37,7 @@ shell.innerHTML=[
 ].join("");
 header.parentNode.insertBefore(shell,main);main.style.display="none";
 var $=id=>document.getElementById(id);
-var selected=[],results=[],busy=false,cancelRequested=false,maxBytes=256*1024*1024,maxBatchBytes=384*1048576;
+var selected=[],results=[],busy=false,cancelRequested=false,selectionVersion=0,maxBytes=256*1024*1024,maxBatchBytes=384*1048576;
 function mode(v){shell.style.display=v?"":"none";main.style.display=v?"none":"";$("u-mode").setAttribute("aria-pressed",String(v));$("u-pdf-mode").setAttribute("aria-pressed",String(!v));}
 $("u-mode").onclick=()=>mode(true);$("u-pdf-mode").onclick=()=>mode(false);
 var drop=$("u-drop"),input=$("u-files");
@@ -48,17 +48,29 @@ drop.ondragover=e=>{e.preventDefault();drop.classList.add("drag");};
 drop.ondragleave=()=>drop.classList.remove("drag");
 drop.ondrop=e=>{e.preventDefault();drop.classList.remove("drag");setFiles(Array.from(e.dataTransfer.files));};
 input.onchange=()=>setFiles(Array.from(input.files));
-function setFiles(fs){if(busy)return;selected=fs.slice(0,100);results=selected.map(f=>({file:f,name:f.name,size:f.size,format:"Pending",count:"—",status:"Ready",notes:[]}));$("u-progress").textContent=selected.length+" files selected."+(fs.length>100?" Maximum first 100 accepted.":"");refresh();}
+function setFiles(fs){
+ if(busy){$("u-progress").textContent="Finish or cancel the active operation before selecting different files.";return;}
+ const version=++selectionVersion;
+ selected=fs.slice(0,100);
+ results=selected.map(f=>({file:f,name:f.name,size:f.size,format:"Detecting",count:"—",status:"Queued for inspection",notes:[]}));
+ $("u-progress").textContent=selected.length+" file(s) selected. Starting automatic inspection…"+(fs.length>100?" Maximum first 100 accepted.":"");
+ refresh();
+ // Defer one microtask so the queued state can render before inspection begins.
+ Promise.resolve().then(()=>{if(version===selectionVersion&&!busy&&selected.length)run(false);});
+}
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
 function refresh(){
  $("u-inspect").disabled=busy||!selected.length;$("u-clean").disabled=busy||!selected.length;$("u-report").disabled=busy||!results.length;$("u-clear").disabled=busy;$("u-cancel").disabled=!busy||cancelRequested;
  $("u-rows").innerHTML=results.length?results.map(r=>'<tr><td>'+esc(r.name)+'<div class="u-note">'+(r.size/1048576).toFixed(2)+' MiB</div></td><td>'+esc(r.format)+'</td><td>'+esc(r.count)+'</td><td><span class="u-status '+(r.status==="Known tags rechecked"?"ok":(r.status.startsWith("Error")||r.status.startsWith("Unsupported")?"error":""))+'">'+esc(r.status)+'</span></td></tr>').join(""):'<tr><td colspan="4">No files selected</td></tr>';
  $("u-fields").innerHTML=results.length?results.map((r,i)=>{
   const fields=r.metadataFields||[],warnings=r.metadataWarnings||[],diff=r.metadataDiff;
-  const rowHtml=fields.map(f=>'<tr><th scope="row">'+esc(f.name)+'</th><td>'+esc(f.value)+'</td><td>'+esc(f.source)+'</td></tr>').join("");
+  const meta=fields.filter(f=>f.kind!=="technical"),technical=fields.filter(f=>f.kind==="technical");
+  const rowHtml=fields.map(f=>'<tr><th scope="row">'+esc(f.name)+'</th><td>'+esc(f.value)+'</td><td>'+esc(f.source)+'</td><td>'+(f.kind==="technical"?"Technical":"Metadata")+'</td></tr>').join("");
   const warningHtml=warnings.map(w=>'<div class="u-warning">'+esc(w)+'</div>').join("");
-  return '<details class="u-fields" '+(results.length===1?'open':'')+'><summary>'+esc(r.name)+' — '+fields.length+' extracted field(s) · '+esc(r.format)+'</summary>'+
-  (fields.length?'<table><thead><tr><th>Field</th><th>Value</th><th>Source</th></tr></thead><tbody>'+rowHtml+'</tbody></table>':'<p class="u-note">No field values extracted by the available parsers. This does not prove metadata absence.</p>')+
+  return '<details class="u-fields" '+(results.length===1?'open':'')+'><summary>'+esc(r.name)+' — '+meta.length+' metadata field(s), '+technical.length+' technical property/properties · '+esc(r.format)+' · '+esc(r.status)+'</summary>'+
+  (r.status==="Queued for inspection"||r.status==="Inspecting"?'<p class="u-note">Inspection is starting automatically. Metadata results are not ready yet.</p>':'')+
+  (fields.length?'<table><thead><tr><th>Field</th><th>Value</th><th>Source</th><th>Category</th></tr></thead><tbody>'+rowHtml+'</tbody></table>':(r.status==="Queued for inspection"||r.status==="Inspecting"?'':'<p class="u-note">No fields were extracted by the available parsers. This does not prove metadata absence.</p>'))+
+  (technical.length&&!meta.length?'<p class="u-note">No recognized metadata tag values found. The technical details above describe the file and are not evidence that all metadata is absent.</p>':'')+
   (diff?'<h4>Before / after metadata</h4><p class="u-note">Extracted fields removed: '+diff.removed.length+' · Retained: '+diff.retained.length+' · New: '+diff.added.length+'</p>'+
   (diff.removed.length?'<div class="u-warning"><strong>Removed parsed values:</strong> '+diff.removed.map(f=>esc(f.name)+': '+esc(f.value)).join('; ')+'</div>':''):'')+
   (r.contentVerification?'<div class="u-note">Content verification: '+esc(r.contentVerification.level)+' — '+esc(r.contentVerification.checks.join("; "))+'</div>':'')+
@@ -147,6 +159,6 @@ $("u-report").onclick=()=>{
  const doc={tool:"Local File Metadata Inspector",generatedAt:new Date().toISOString(),warning:"The field listing and cleanup cover only documented parser capabilities; unknown/internal metadata may remain. SynthID and invisible watermarks are NOT assessed and cannot be certified absent.",files:results.map(({file,...r})=>r)};
  download(new TextEncoder().encode(JSON.stringify(doc,null,2)),"metadata-report.json","application/json");
 };
-$("u-clear").onclick=()=>{selected=[];results=[];input.value="";$("u-progress").textContent="Selection cleared.";refresh();};
+$("u-clear").onclick=()=>{selectionVersion++;selected=[];results=[];input.value="";$("u-progress").textContent="Selection cleared.";refresh();};
 refresh();
 })();
