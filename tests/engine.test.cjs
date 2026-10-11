@@ -8,7 +8,11 @@ const le=n=>u([n&255,(n>>>8)&255,(n>>>16)&255,(n>>>24)&255]);
 const be=n=>u([(n>>>24)&255,(n>>>16)&255,(n>>>8)&255,n&255]);
 function riff(tag,chunks){const body=cat(...chunks);return cat(ascii("RIFF"),le(body.length+4),ascii(tag),body);}
 function chunk(tag,bytes){return cat(ascii(tag),le(bytes.length),bytes,bytes.length%2?u([0]):u([]));}
-function pngChunk(tag,bytes){return cat(be(bytes.length),ascii(tag),bytes,u([0,0,0,0]));}
+function pngChunk(tag,bytes){
+ const body=cat(ascii(tag),bytes);let crc=0xffffffff;
+ for(const v of body){crc^=v;for(let i=0;i<8;i++)crc=(crc&1)?((crc>>>1)^0xedb88320):(crc>>>1);}
+ return cat(be(bytes.length),body,be((crc^0xffffffff)>>>0));
+}
 function test(name,fn){fn();console.log("PASS "+name);}
 test("JPEG detection and safe APP1 removal",()=>{
  const input=cat(u([255,216,255,225,0,4,65,66,255,218,0,2,1,2,255,217]));
@@ -58,6 +62,10 @@ test("MP3 ID3v2 and ID3v1 removal",()=>{
 test("Disguised extension cannot override detected format",()=>{
  const jpeg=u([255,216,255,218,0,2,0,255,217]);
  assert.equal(E.identify(jpeg,"pretend.pdf"),"jpeg");
+});
+test("Damaged PNG CRC rejected rather than producing a fake-clean result",()=>{
+ const png=cat(u([137,80,78,71,13,10,26,10]),pngChunk("tEXt",ascii("a=b")),pngChunk("IEND",u([])));
+ png[20]^=1;assert.throws(()=>E.binary(png,true));
 });
 test("Truncated PNG and JPEG fail closed",()=>{
  assert.throws(()=>E.binary(u([255,216,255,225,0,30,1,2]),true));
