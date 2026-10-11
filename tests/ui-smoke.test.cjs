@@ -26,7 +26,8 @@ test("Browser shell loads multi-file and legacy PDF modes without a backend",()=
  assert.notEqual(d.querySelector("main").style.display,"none");
  d.getElementById("u-mode").click();
  assert.equal(d.querySelector("main").style.display,"none");
- assert.ok(d.getElementById("u-details").textContent.includes("No files"));
+ assert.equal(d.getElementById("u-details").textContent.trim(),"[]");
+ assert.ok(d.getElementById("u-rows").textContent.includes("No files selected"));
  dom.window.close();
 });
 test("Client UI never says SynthID was successfully removed",()=>{
