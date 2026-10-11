@@ -67,7 +67,7 @@ test("Office entries are compared by actual uncompressed bytes",async()=>{
  assert.equal((await V.verify(a,b,"docx",{zipLib:JSZip})).preserved,true);
  const broken=await JSZip.loadAsync(b);broken.file("word/document.xml","<doc>Changed!</doc>");
  const tampered=await broken.generateAsync({type:"uint8array",compression:"DEFLATE"});
- await assert.rejects(()=>V.verify(a,tampered,"docx",{zipLib:JSZip}),/changed/);
+ await assert.rejects(()=>V.verify(a,tampered,"docx",{zipLib:JSZip}),/changed|differs/);
 });
 test("Unknown files cannot be certified",async()=>{
  await assert.rejects(()=>V.verify(str("hello"),str("hello"),"unknown"),/No content preservation verifier/);
