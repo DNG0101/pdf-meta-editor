@@ -15,7 +15,7 @@ const label=(s)=>String(s).replace(/[\u0000-\u001f\u007f]/g," ").trim().slice(0,
 function inspect(a,name="",deps={}){
  if(!(a instanceof Uint8Array)||!a.length)throw Error("Nonempty Uint8Array required");
  const format=globalFormat(a,name);
- const fields=[],warnings=[],seen=new Set();
+ const fields=[],warnings=[];
  let valueBudget=2*1048576;
  function add(key,value,source,kind="metadata"){
   if(fields.length>=2000){if(!warnings.includes("Field inspection limited to 2000 entries"))warnings.push("Field inspection limited to 2000 entries");return;}
@@ -28,9 +28,9 @@ function inspect(a,name="",deps={}){
    if(!warnings.includes("Some extracted values were truncated by the 128 KiB per-field / 2 MiB total inspection budget"))warnings.push("Some extracted values were truncated by the 128 KiB per-field / 2 MiB total inspection budget");
   }
   valueBudget=Math.max(0,valueBudget-Math.min(originalChars,allowed));
-  const title=label(key),id=source+":"+title+":"+str;
-  if(seen.has(id))return;
-  seen.add(id);
+  const title=label(key);
+  // Repeated EXIF/ID3/Vorbis/XMP tags can be meaningful even when their text
+  // is identical; do not silently deduplicate or omit them from JSON reports.
   fields.push({name:title,value:str,source,kind,complete:originalChars<=allowed,originalCharacters:originalChars});
  }
  const ctx={add,warnings};
@@ -59,7 +59,7 @@ function globalFormat(a,name){
  if(k==="unknown"&&X)k=X.identify(a)||"unknown";
  return k;
 }
-const exifNames={0x010e:"ImageDescription",0x010f:"Make",0x0110:"Model",0x0112:"Orientation",0x0131:"Software",0x0132:"DateTime",0x013b:"Artist",0x8298:"Copyright",0x9003:"DateTimeOriginal",0x9004:"DateTimeDigitized",0x9286:"UserComment",0xa420:"ImageUniqueID",0xa434:"LensModel",0xa431:"BodySerialNumber",0x0001:"GPSLatitudeRef",0x0002:"GPSLatitude",0x0003:"GPSLongitudeRef",0x0004:"GPSLongitude",0x0005:"GPSAltitudeRef",0x0006:"GPSAltitude",0x001d:"GPSDateStamp",0x0007:"GPSTimeStamp"};
+const exifNames={0x00fe:"SubfileType",0x0100:"ImageWidth",0x0101:"ImageLength",0x0102:"BitsPerSample",0x0103:"Compression",0x0106:"PhotometricInterpretation",0x0111:"StripOffsets",0x0115:"SamplesPerPixel",0x0116:"RowsPerStrip",0x0117:"StripByteCounts",0x011a:"XResolution",0x011b:"YResolution",0x0128:"ResolutionUnit",0x014a:"SubIFDs",0x0201:"JPEGInterchangeFormat",0x0202:"JPEGInterchangeFormatLength",0x829a:"ExposureTime",0x829d:"FNumber",0x8827:"PhotographicSensitivity",0x8830:"SensitivityType",0x9000:"ExifVersion",0x9010:"OffsetTime",0x9011:"OffsetTimeOriginal",0x9012:"OffsetTimeDigitized",0x9101:"ComponentsConfiguration",0x9201:"ShutterSpeedValue",0x9202:"ApertureValue",0x9203:"BrightnessValue",0x9204:"ExposureBiasValue",0x9207:"MeteringMode",0x9209:"Flash",0x920a:"FocalLength",0xa002:"PixelXDimension",0xa003:"PixelYDimension",0xa001:"ColorSpace",0xa405:"FocalLengthIn35mmFilm",0xa433:"LensMake",0xa435:"LensSerialNumber",0x010e:"ImageDescription",0x010f:"Make",0x0110:"Model",0x0112:"Orientation",0x0131:"Software",0x0132:"DateTime",0x013b:"Artist",0x8298:"Copyright",0x9003:"DateTimeOriginal",0x9004:"DateTimeDigitized",0x9286:"UserComment",0xa420:"ImageUniqueID",0xa434:"LensModel",0xa431:"BodySerialNumber",0x0001:"GPSLatitudeRef",0x0002:"GPSLatitude",0x0003:"GPSLongitudeRef",0x0004:"GPSLongitude",0x0005:"GPSAltitudeRef",0x0006:"GPSAltitude",0x001d:"GPSDateStamp",0x0007:"GPSTimeStamp"};
 function tiff(bytes,ctx,prefix="EXIF"){
  if(bytes.length<8)throw Error("Invalid EXIF/TIFF header");
  const bo=ascii(bytes,0,2);
@@ -81,12 +81,20 @@ function tiff(bytes,ctx,prefix="EXIF"){
    if(at+sz>bytes.length)throw Error("EXIF tag value out of bounds");
    if([0x8769,0x8825,0xa005].includes(tag)){if(type===4&&n===1)ifd(u32(at),tag===0x8825?"GPS":"EXIF",depth+1);continue;}
    let value;
-   if(type===2)value=ascii(bytes,at,Math.min(sz,1024)).replace(/\0+$/,"");
-   else if(type===3)value=Array.from({length:Math.min(n,8)},(_,j)=>u16(at+j*2)).join(", ");
-   else if(type===4)value=Array.from({length:Math.min(n,8)},(_,j)=>u32(at+j*4)).join(", ");
-   else if(type===5||type===10)value=Array.from({length:Math.min(n,4)},(_,j)=>{const o=at+j*8;return u32(o)+"/"+u32(o+4);}).join(", ");
-   else if(type===7)value=n+" bytes (binary)";
-   else value=n+" bytes";
+   if(type===2)value=ascii(bytes,at,Math.min(sz,131072)).replace(/\0+$/,"");
+   else if(type===1)value=Array.from({length:Math.min(n,16)},(_,j)=>bytes[at+j]).join(", ")+(n>16?"…":"");
+   else if(type===3)value=Array.from({length:Math.min(n,32)},(_,j)=>u16(at+j*2)).join(", ")+(n>32?"…":"");
+   else if(type===4)value=Array.from({length:Math.min(n,32)},(_,j)=>u32(at+j*4)).join(", ")+(n>32?"…":"");
+   else if(type===9)value=Array.from({length:Math.min(n,32)},(_,j)=>u32(at+j*4)|0).join(", ")+(n>32?"…":"");
+   else if(type===5||type===10)value=Array.from({length:Math.min(n,12)},(_,j)=>{
+    const o=at+j*8,whole=u32(o),frac=u32(o+4);
+    return (type===10?(whole|0)+"/"+(frac|0):whole+"/"+frac);
+   }).join(", ")+(n>12?"…":"");
+   else if(type===7){
+    const b=bytes.subarray(at,at+Math.min(n,131072));
+    const isASCII=ascii(b,0,8)==="ASCII\0\0\0";
+    value=isASCII?ascii(b,8,b.length-8).replace(/\0+$/,""):n+" bytes binary (hex "+Array.from(b.subarray(0,24),v=>v.toString(16).padStart(2,"0")).join(" ")+")";
+   }else value=n+" bytes";
    const known=exifNames[tag]||("Tag 0x"+tag.toString(16).padStart(4,"0"));
    ctx.add(scope+" "+known,value,prefix);
   }
