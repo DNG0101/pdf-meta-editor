@@ -41,3 +41,6 @@ jobs:
         run: npm install --no-audit --no-fund
       - name: Verify syntax and all tests
         run: npm run verify
+      - name: Check real Zeroperl WASM asset delivery
+        if: matrix.node == '22'
+        run: node tests/exiftool-live-smoke.cjs
