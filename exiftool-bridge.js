@@ -20,7 +20,7 @@
   "https://cdn.jsdelivr.net/npm/"+WASM_PACKAGE+"/dist/esm/zeroperl.wasm",
   "https://unpkg.com/"+WASM_PACKAGE+"/dist/esm/zeroperl.wasm",
   "https://esm.sh/"+WASM_PACKAGE+"/zeroperl.wasm",
-  "https://raw.githubusercontent.com/6over3/zeroperl-ts/main/zeroperl.wasm"
+  "https://raw.githubusercontent.com/6over3/zeroperl-ts/5e12fb86cebf09795c32befa390718b3d8ddd3e7/zeroperl.wasm"
  ];
  const MAX_WASM=64*1048576;
  let wasmBinaryPromise=null;
