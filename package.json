@@ -1,7 +1,7 @@
 {
   "name": "local-file-metadata-suite",
   "private": true,
-  "version": "0.6.0",
+  "version": "0.6.1",
   "scripts": {
     "check": "node --check app.js && node --check universal-engine.js && node --check universal-ui.js && node --check formats-extra.js && node --check zip-guard.js && node --check metadata-inspector.js && node --check content-verifier.js && node --check metadata-extended.js",
     "test": "node --test tests/*.test.cjs",
