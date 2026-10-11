@@ -26,7 +26,13 @@ function jpeg(a,strip){
   while(p<a.length&&a[p]===255)p++;
   if(p>=a.length)throw Error("Truncated JPEG");
   const marker=a[p++];
-  if(marker===0xda){if(p+2>a.length)throw Error("Truncated JPEG scan");parts.push(a.subarray(start));foundEnd=true;break;}
+  if(marker===0xda){
+   if(p+2>a.length)throw Error("Truncated JPEG scan");
+   const size=(a[p]<<8)|a[p+1];
+   if(size<6||p+size>a.length)throw Error("Invalid JPEG scan header");
+   if(a.length<2||a[a.length-2]!==255||a[a.length-1]!==217)throw Error("JPEG missing final EOI marker or has trailing data");
+   parts.push(a.subarray(start));foundEnd=true;break;
+  }
   if(marker===0xd9){parts.push(a.subarray(start,p));foundEnd=true;break;}
   if(marker===0x01||(marker>=0xd0&&marker<=0xd8)){parts.push(a.subarray(start,p));continue;}
   if(p+2>a.length)throw Error("Truncated JPEG length");
@@ -87,7 +93,7 @@ function mp3(a,strip){
  }
  if(end-begin>=128&&decode(a,end-128,3)==="TAG"){end-=128;count++;if(strip)removed.push("ID3v1");}
  if(begin>=end)throw Error("No MP3 audio payload after tags");
- if(a.length>=32&&decode(a,a.length-32,8)==="APETAGEX")throw Error("APEv2 tag detected; removal is not implemented safely");
+ if(a.length>=32&&(decode(a,a.length-32,8)==="APETAGEX"||(end>=32&&decode(a,end-32,8)==="APETAGEX")))throw Error("APEv2 tag detected; removal is not implemented safely");
  return {count,removed,bytes:strip?a.slice(begin,end):a,notes:["Other MP3 tag formats or in-stream identifiers may remain."]};
 }
 function wav(a,strip){
@@ -110,10 +116,13 @@ function wav(a,strip){
 function binary(a,strip=false){const format=identify(a);if(format==="jpeg")return {...jpeg(a,strip),format};if(format==="png")return {...png(a,strip),format};if(format==="webp")return {...webp(a,strip),format};if(format==="wav")return {...wav(a,strip),format};if(format==="mp3")return {...mp3(a,strip),format};return {format,count:0,removed:[],bytes:a,notes:["No verified binary metadata remover for this format."]};}
 async function office(a,strip,zipLib){
  if(!zipLib)throw Error("JSZip is unavailable; Office sanitization is disabled");
+ if(typeof FileMetaZipGuard==="undefined")throw Error("ZIP safety preflight unavailable; refusing to open Office file");
+ FileMetaZipGuard.preflight(a);
  const zip=await zipLib.loadAsync(a,{checkCRC32:true});
  const keys=Object.keys(zip.files);
  const fileKind=keys.includes("word/document.xml")?"docx":keys.includes("xl/workbook.xml")?"xlsx":keys.includes("ppt/presentation.xml")?"pptx":null;
  if(!fileKind)throw Error("Not a recognized Office Open XML document");
+ if(keys.some(k=>/vbaproject[.]bin$/i.test(k)||/(^|\/)activex\//i.test(k)))throw Error("Macro or ActiveX Office package requires a dedicated safe editor");
  if(keys.some(k=>k.startsWith("_xmlsignatures/")||k.includes("/_xmlsignatures/")))throw Error("Digitally signed Office file: preserving the existing signature");
  const targets=keys.filter(k=>/^docProps\/(?:core|app|custom|thumbnail)\.(?:xml|jpeg|jpg|png)$/i.test(k));
  const notes=["ZIP package rebuilt: compression and byte-level hashes can change.","Other metadata may remain in document content, comments, relationships or embedded objects."];
@@ -180,8 +189,10 @@ async function process(a,name,{remove=false,zipLib, pdfLib}={}){
   // Generic ZIP files must remain untouched. OOXML must be positively identified.
   if(!/\.(docx|xlsx|pptx|docm|xlsm|pptm)$/i.test(name))return {format:"zip",supported:false,changed:false,count:0,bytes:a,removed:[],notes:["Generic ZIP metadata removal is unsupported."]};
   result=await office(a,remove,zipLib);
+ }else if(kind==="unknown"&&typeof FileMetaExtraFormats!=="undefined"){
+  result=FileMetaExtraFormats.process(a,remove)||binary(a,remove);
  }else result=binary(a,remove);
- const supported=["jpeg","png","webp","mp3","wav","pdf","docx","xlsx","pptx"].includes(result.format);
+ const supported=["jpeg","png","webp","mp3","wav","pdf","docx","xlsx","pptx","gif","flac"].includes(result.format);
  return {...result,supported,changed:remove&&result.removed.length>0,
    verification:!remove?"Inspection only":!supported?"Unsupported":result.removed.length?"Format-specific removal verified; universal metadata and watermark removal NOT guaranteed":"No supported metadata blocks found; not certified metadata-free"};
 }
