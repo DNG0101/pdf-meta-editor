@@ -68,9 +68,10 @@ function refresh(){
  $("u-rows").innerHTML=results.length?results.map(r=>'<tr><td>'+esc(r.name)+'<div class="u-note">'+(r.size/1048576).toFixed(2)+' MiB</div></td><td>'+esc(r.format)+'</td><td>'+esc(r.count)+'</td><td><span class="u-status '+(r.status==="Known tags rechecked"?"ok":(r.status.startsWith("Error")||r.status.startsWith("Unsupported")?"error":""))+'">'+esc(r.status)+'</span></td></tr>').join(""):'<tr><td colspan="4">No files selected</td></tr>';
  $("u-fields").innerHTML=results.length?results.map((r,i)=>{
   const filter=$("u-filter").value.trim().toLowerCase();
-  const allFields=r.metadataFields||[];
+  const viewingOutput=r.status==="Known tags rechecked"&&Array.isArray(r.remainingFields);
+  const allFields=viewingOutput?r.remainingFields:(r.metadataFields||[]);
   const fields=filter?allFields.filter(f=>[f.name,f.value,f.source,f.kind].some(v=>String(v||"").toLowerCase().includes(filter))):allFields;
-  const warnings=r.metadataWarnings||[],diff=r.metadataDiff;
+  const warnings=(viewingOutput?r.remainingFieldWarnings:r.metadataWarnings)||[],diff=r.metadataDiff;
   const meta=allFields.filter(f=>f.kind!=="technical"),technical=allFields.filter(f=>f.kind==="technical");
   const rowHtml=fields.map(f=>{
    const value=String(f.value||""),short=value.length>450;
@@ -78,9 +79,9 @@ function refresh(){
    return '<tr><th scope="row">'+esc(f.name)+'</th><td>'+view+(f.complete===false?'<div class="u-warning">Value incomplete: inspection safety limit reached</div>':'')+'</td><td>'+esc(f.source)+'</td><td>'+(f.kind==="technical"?"Technical":"Metadata")+'</td></tr>';
   }).join("");
   const warningHtml=warnings.map(w=>'<div class="u-warning">'+esc(w)+'</div>').join("");
-  return '<details class="u-fields" '+(results.length===1?'open':'')+'><summary>'+esc(r.name)+' — '+meta.length+' metadata field(s), '+technical.length+' technical property/properties · '+esc(r.format)+' · '+esc(r.status)+'</summary>'+
+  return '<details class="u-fields" '+(results.length===1?'open':'')+'><summary>'+esc(r.name)+' — '+meta.length+' metadata field(s), '+technical.length+' technical property/properties · '+esc(r.format)+' · '+esc(r.status)+(viewingOutput?' · Cleaned output':'')+'</summary>'+
   (r.status==="Queued for inspection"||r.status==="Inspecting"?'<p class="u-note">Inspection is starting automatically. Metadata results are not ready yet.</p>':'')+
-  (r.metadataCoverage?'<p class="u-note">Coverage: '+esc(r.metadataCoverage)+' · '+esc(r.metadataFieldCounts?.truncated||0)+' capped field(s)</p>':'')+
+  (r.metadataCoverage?'<p class="u-note">Coverage: '+esc(r.metadataCoverage)+' · '+esc((viewingOutput?r.remainingFieldCounts:r.metadataFieldCounts)?.truncated||0)+' capped field(s). '+(viewingOutput?'Showing fields detected in the cleaned output, not original metadata.':'')+'</p>':'')+
   (filter?'<p class="u-note">Showing '+fields.length+' of '+allFields.length+' extracted fields</p>':'')+
   (fields.length?'<table><thead><tr><th>Field</th><th>Value</th><th>Source</th><th>Category</th></tr></thead><tbody>'+rowHtml+'</tbody></table>':(r.status==="Queued for inspection"||r.status==="Inspecting"?'':'<p class="u-note">No fields were extracted by the available parsers. This does not prove metadata absence.</p>'))+
   (technical.length&&!meta.length?'<p class="u-note">No recognized metadata tag values found. The technical details above describe the file and are not evidence that all metadata is absent.</p>':'')+
@@ -145,14 +146,23 @@ async function run(clean){
      if(beforeField&&(!afterField||afterField.value!==beforeField.value))throw Error("Output structural property changed: "+key);
     }
     r.remainingFields=after.fields;r.remainingFieldWarnings=after.warnings;
+    r.remainingFieldCounts=after.fieldCounts;
     const originalFields=inspected.fields;
-    const originalSet=new Set(originalFields.map(f=>JSON.stringify([f.name,f.value,f.source])));
-    const remainingSet=new Set(after.fields.map(f=>JSON.stringify([f.name,f.value,f.source])));
-    r.metadataDiff={
-     removed:originalFields.filter(f=>!remainingSet.has(JSON.stringify([f.name,f.value,f.source]))),
-     retained:originalFields.filter(f=>remainingSet.has(JSON.stringify([f.name,f.value,f.source]))),
-     added:after.fields.filter(f=>!originalSet.has(JSON.stringify([f.name,f.value,f.source])))
-    };
+    const fieldKey=f=>JSON.stringify([f.name,f.value,f.source,f.kind]);
+    // Compare occurrences, not sets: identical repeated tags are distinct.
+    const remainingCounts=new Map(),originalCounts=new Map();
+    for(const f of after.fields){const k=fieldKey(f);remainingCounts.set(k,(remainingCounts.get(k)||0)+1);}
+    for(const f of originalFields){const k=fieldKey(f);originalCounts.set(k,(originalCounts.get(k)||0)+1);}
+    const removed=[],retained=[],added=[];
+    for(const f of originalFields){
+     const k=fieldKey(f),n=remainingCounts.get(k)||0;
+     if(n){retained.push(f);remainingCounts.set(k,n-1);}else removed.push(f);
+    }
+    for(const f of after.fields){
+     const k=fieldKey(f),n=originalCounts.get(k)||0;
+     if(n)originalCounts.set(k,n-1);else added.push(f);
+    }
+    r.metadataDiff={removed,retained,added};
     r.status="Known tags rechecked";r.changed=true;r.outputSize=out.bytes.length;
     r.verification="Known removable blocks absent, retained content "+integrity.level+" and selected structure rechecked; hidden metadata and SynthID NOT certified absent";
     r.outputSha256=await hash(out.bytes);
