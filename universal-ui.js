@@ -28,11 +28,12 @@ var shell=document.createElement("section");shell.className="u-shell";shell.setA
 shell.innerHTML=[
 '<div class="u-hero"><h2>Universal File Metadata Inspector & Cleaner</h2><p>Inspect any local file. Remove supported metadata from JPEG, PNG, WebP, GIF, FLAC, MP3, WAV, PDF and Office files. Other recognized file formats are inspection-only. Unsupported types are inspection-only. SynthID and other embedded content watermarks are not certified removable or detectable.</p></div>',
 '<div class="u-drop" id="u-drop" role="button" tabindex="0" aria-label="Choose local files"><strong>Drop files here or choose files</strong><p class="u-note">Local processing · No file upload · Up to 100 files · 256 MiB per file · 384 MiB per batch</p><button id="u-choose" type="button" class="u-button primary">Choose files</button><input id="u-files" type="file" multiple hidden/></div>',
-'<div class="u-toolbar"><button class="u-button primary" id="u-inspect" disabled>Inspect files</button><button class="u-button" id="u-clean" disabled>Remove supported metadata & download</button><button class="u-button" id="u-cancel" disabled>Cancel after current file</button><button class="u-button" id="u-report" disabled>Export JSON report</button><button class="u-button" id="u-clear">Clear</button></div>',
+'<div class="u-toolbar"><button class="u-button primary" id="u-inspect" disabled>Inspect files</button><button class="u-button" id="u-deep" disabled>Deep ExifTool scan (WASM)</button><button class="u-button" id="u-exif-import" disabled>Import ExifTool JSON</button><input id="u-exif-json" type="file" accept=".json,application/json" hidden/><button class="u-button" id="u-clean" disabled>Remove supported metadata & download</button><button class="u-button" id="u-cancel" disabled>Cancel after current file</button><button class="u-button" id="u-report" disabled>Export JSON report</button><button class="u-button" id="u-clear">Clear</button></div>',
 '<p class="u-note"><strong>Limits:</strong> Format-aware cleanup does not prove absence of all metadata, invisible watermarks, or SynthID. Existing signatures are protected; keep the original file. No file is sent to a backend.</p>',
 '<p class="u-note" id="u-progress" role="status" aria-live="polite">Select files to begin.</p>',
 '<section class="u-panel"><h3>File inspection and cleaning</h3><div style="overflow-x:auto"><table class="u-table"><thead><tr><th>File</th><th>Format</th><th>Removable blocks detected</th><th>Status</th></tr></thead><tbody id="u-rows"></tbody></table></div></section>',
 '<section class="u-panel"><h3>Extracted metadata fields</h3><div class="u-note" style="padding:10px 16px">Expand a file to view parsed metadata names, values and source structures. Coverage is partial; compressed or unknown metadata may remain.</div><div style="padding:0 16px 12px"><label for="u-filter" class="u-note">Search all extracted fields</label><input id="u-filter" type="search" placeholder="Search metadata, technical values or source..." style="width:100%;padding:10px;border:1px solid #a5b8cf;border-radius:8px" /></div><div id="u-fields"></div></section>',
+'<section class="u-panel"><h3>ExifTool deep metadata (optional)</h3><div class="u-note" style="padding:10px 16px">Click <strong>Deep ExifTool scan</strong> to run an experimental browser WebAssembly port of ExifTool. Its code/WASM initially downloads from a third-party CDN; selected files are processed locally. Alternatively, import ExifTool JSON containing matching SourceFile filenames. These are inspection-only capabilities and do not certify complete metadata or SynthID removal.</div><div id="u-exif-results"></div></section>',
 '<section class="u-panel"><h3>Detailed results & warnings</h3><pre class="u-report" id="u-details">No files selected.</pre></section>'
 ].join("");
 header.parentNode.insertBefore(shell,main);main.style.display="none";
@@ -64,7 +65,7 @@ function setFiles(fs){
 }
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
 function refresh(){
- $("u-inspect").disabled=busy||!selected.length;$("u-clean").disabled=busy||!selected.length;$("u-report").disabled=busy||!results.length;$("u-clear").disabled=busy;$("u-cancel").disabled=!busy||cancelRequested;
+ $("u-inspect").disabled=busy||!selected.length;$("u-deep").disabled=busy||!selected.length;$("u-exif-import").disabled=busy||!selected.length;$("u-clean").disabled=busy||!selected.length;$("u-report").disabled=busy||!results.length;$("u-clear").disabled=busy;$("u-cancel").disabled=!busy||cancelRequested;
  $("u-rows").innerHTML=results.length?results.map(r=>'<tr><td>'+esc(r.name)+'<div class="u-note">'+(r.size/1048576).toFixed(2)+' MiB</div></td><td>'+esc(r.format)+'</td><td>'+esc(r.count)+'</td><td><span class="u-status '+(r.status==="Known tags rechecked"?"ok":(r.status.startsWith("Error")||r.status.startsWith("Unsupported")?"error":""))+'">'+esc(r.status)+'</span></td></tr>').join(""):'<tr><td colspan="4">No files selected</td></tr>';
  $("u-fields").innerHTML=results.length?results.map((r,i)=>{
   const filter=$("u-filter").value.trim().toLowerCase();
@@ -90,6 +91,20 @@ function refresh(){
   (r.contentVerification?'<div class="u-note">Content verification: '+esc(r.contentVerification.level)+' — '+esc(r.contentVerification.checks.join("; "))+'</div>':'')+
   warningHtml+'</details>';
  }).join(""):'<p class="u-note" style="padding:14px">Select and inspect files to see their real metadata fields.</p>';
+ $("u-exif-results").innerHTML=results.length?results.map(r=>{
+  const deep=r.deepInspection,all=deep?.fields||[];
+  const filter=$("u-filter").value.trim().toLowerCase();
+  const matched=filter?all.filter(f=>[f.name,f.source,f.value].some(v=>String(v||"").toLowerCase().includes(filter))):all;
+  const rows=matched.slice(0,250).map(f=>{
+   const value=String(f.value||""),short=value.length>450;
+   const printable=short?esc(value.slice(0,450))+'… <details><summary>Show remaining value</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;overflow:auto">'+esc(value)+'</pre></details>':esc(value);
+   return '<tr><th scope="row">'+esc(f.name)+'</th><td>'+printable+(f.complete===false?' <span class="u-warning">[truncated]</span>':'')+'</td><td>'+esc(f.source)+'</td></tr>';
+  }).join("");
+  const warnings=(deep?.warnings||[]).slice(0,25).map(w=>'<div class="u-warning">'+esc(w)+'</div>').join("");
+  return '<details class="u-fields" '+(results.length===1?'open':'')+'><summary>'+esc(r.name)+' — '+esc(r.deepStatus||"Not scanned")+(deep?' · '+all.length+' extracted ExifTool field(s)':'')+'</summary>'+
+   (deep?'<p class="u-note">'+esc(deep.coverage)+' · Showing '+Math.min(matched.length,250)+' of '+matched.length+' matching fields. Full bounded results are in the JSON report.</p>':'')+
+   (rows?'<table><thead><tr><th>ExifTool tag</th><th>Value</th><th>Group</th></tr></thead><tbody>'+rows+'</tbody></table>':'<p class="u-note">No ExifTool deep-scan fields available for this file.</p>')+warnings+'</details>';
+ }).join(""):'<p class="u-note" style="padding:14px">Choose files to enable optional deep ExifTool inspection.</p>';
  $("u-details").textContent=JSON.stringify(results.map(({file,...data})=>data),null,2);
 }
 async function bytesOf(r){if(r.size>maxBytes)throw Error("File exceeds 256 MiB browser safety limit");if(!r.size)throw Error("Empty file");return new Uint8Array(await r.file.arrayBuffer());}
@@ -204,6 +219,49 @@ async function run(clean){
  failures+" error(s)."+packageError;
  refresh();
 }
+async function deepScan(){
+ if(busy||!results.length)return;
+ if(typeof FileMetaExifTool==="undefined"){$("u-progress").textContent="ExifTool WASM integration is unavailable.";return;}
+ busy=true;cancelRequested=false;refresh();
+ let ok=0,failed=0;
+ for(const r of results){
+  if(cancelRequested){r.deepStatus="Canceled";continue;}
+  r.deepStatus="Deep scan running";$("u-progress").textContent="ExifTool analyzing: "+r.name;refresh();
+  try{
+   const output=await FileMetaExifTool.scan(r.file);
+   r.deepInspection=output;r.deepStatus="ExifTool extracted";ok++;
+  }catch(e){
+   r.deepStatus="ExifTool unavailable/error";r.deepError=String(e?.message||e).slice(0,600);failed++;
+   r.deepInspection={fields:[],warnings:["ExifTool WASM failed: "+r.deepError,"The built-in inspection results remain available."],coverage:"ExifTool not completed"};
+  }
+  refresh();
+ }
+ busy=false;$("u-progress").textContent="ExifTool deep inspection completed: "+ok+" success, "+failed+" unavailable/failed. Source files were not modified.";refresh();
+}
+async function importExifReport(){
+ const file=$("u-exif-json").files?.[0];if(!file||busy)return;
+ if(file.size>8*1048576){$("u-progress").textContent="ExifTool JSON exceeds 8 MiB import limit.";return;}
+ try{
+  const json=JSON.parse(new TextDecoder().decode(await file.arrayBuffer()));
+  let imported=0;
+  for(const r of results){
+   try{
+    r.deepInspection=FileMetaExifTool.fromJson(json,r.name);
+    r.deepInspection.warnings.push("Imported ExifTool JSON is not authenticated against the current file bytes.");
+    r.deepStatus="Imported ExifTool JSON (not verified)";
+    imported++;
+   }catch(e){
+    r.deepStatus="No matching JSON record";
+    r.deepInspection=undefined;
+   }
+  }
+  $("u-progress").textContent="Imported ExifTool JSON for "+imported+" of "+results.length+" selected file(s).";
+ }catch(e){$("u-progress").textContent="ExifTool JSON import failed: "+String(e?.message||e).slice(0,250);}
+ $("u-exif-json").value="";refresh();
+}
+$("u-deep").onclick=()=>deepScan();
+$("u-exif-import").onclick=()=>{$("u-exif-json").click();};
+$("u-exif-json").onchange=()=>importExifReport();
 $("u-filter").oninput=()=>refresh();
 $("u-inspect").onclick=()=>run(false);
 $("u-clean").onclick=()=>run(true);
