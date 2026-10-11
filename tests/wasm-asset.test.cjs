@@ -1,0 +1,86 @@
+"use strict";
+const {test}=require("node:test");
+const assert=require("node:assert/strict");
+const Bridge=require("../exiftool-bridge.js");
+
+const MAGIC=Uint8Array.of(0,97,115,109,1,0,0,0); // Valid minimal WASM module.
+const html="<!DOCTYPE html><html><body>CDN fallback</body></html>";
+const reply=(bytes,opts={})=>new Response(bytes,{status:opts.status||200,headers:{"Content-Type":opts.mime||"application/wasm"}});
+const bad=(text)=>reply(text,{mime:"text/html"});
+
+test("Detect missing WASM header even when HTTP status is 200",()=>{
+ assert.equal(Bridge.isWasm(MAGIC.buffer),true);
+ assert.equal(Bridge.isWasm(new TextEncoder().encode(html).buffer),false);
+ assert.equal(Bridge.isWasm(new ArrayBuffer(0)),false);
+});
+
+test("HTML CDN response falls back to another provider with valid WASM",async()=>{
+ const calls=[];
+ const result=await Bridge.fetchCheckedWasm({
+  urls:["https://broken.example/zeroperl.wasm","https://working.example/zeroperl.wasm"],
+  fetchImpl:async url=>{
+   calls.push(url);
+   return url.includes("broken")?bad(html):reply(MAGIC);
+  }
+ });
+ assert.deepEqual(calls,["https://broken.example/zeroperl.wasm","https://working.example/zeroperl.wasm"]);
+ assert.equal(result.url,"https://working.example/zeroperl.wasm");
+ assert.equal(Bridge.isWasm(result.binary),true);
+});
+
+test("HTML, network and 404 errors are disclosed rather than sent to WebAssembly.instantiate",async()=>{
+ await assert.rejects(()=>Bridge.fetchCheckedWasm({
+  urls:["https://bad.example","https://offline.example","https://missing.example"],
+  fetchImpl:async url=>{
+   if(url.includes("offline"))throw Error("Network offline");
+   if(url.includes("missing"))return reply(html,{status:404});
+   return bad(html);
+  }
+ }),error=>{
+  assert.match(error.message,/HTML, not WebAssembly/);
+  assert.match(error.message,/Network offline/);
+  assert.match(error.message,/HTTP 404/);
+  return true;
+ });
+});
+
+test("WASM response wrapper supplies a real Response with correct MIME type and magic",async()=>{
+ const response=await Bridge.checkedWasmResponse({
+  urls:["https://wasm.example/runtime.wasm"],
+  fetchImpl:async()=>reply(MAGIC)
+ });
+ assert.equal(response.headers.get("Content-Type"),"application/wasm");
+ assert.equal(Bridge.isWasm(await response.arrayBuffer()),true);
+});
+
+test("WASM with valid prefix but corrupt module body is rejected",async()=>{
+ const damaged=Uint8Array.from([...MAGIC,255,255,255,255]);
+ await assert.rejects(()=>Bridge.fetchCheckedWasm({
+  urls:["https://wasm.example/broken.wasm"],
+  fetchImpl:async()=>reply(damaged)
+ }),/WebAssembly\.validate rejected/);
+});
+
+test("ExifTool wrapper actually receives custom binary loader and never fetches the imported HTML URL",async()=>{
+ const filename="sample.png",provided={name:filename,size:16},calls=[];
+ const record=[{SourceFile:filename,"[EXIF]Make":"CameraCo"}];
+ const result=await Bridge.scan(provided,{
+  wasmOptions:{
+   urls:["https://fallback.example/zeroperl.wasm"],
+   fetchImpl:async (url)=>{
+    calls.push(url);
+    return reply(MAGIC);
+   }
+  },
+  loader:async()=>({parseMetadata:async(file,options)=>{
+   assert.equal(file,provided);
+   assert.equal(typeof options.fetch,"function");
+   const wasmResponse=await options.fetch("https://esm.sh/NOT-REAL/zeroperl.wasm");
+   assert.equal(Bridge.isWasm(await wasmResponse.arrayBuffer()),true);
+   assert.deepEqual(options.transform(JSON.stringify(record)),record);
+   return {success:true,data:record};
+  }})
+ });
+ assert.deepEqual(calls,["https://fallback.example/zeroperl.wasm"]);
+ assert.equal(result.fields.find(f=>f.name==="[EXIF]Make").value,"CameraCo");
+});
