@@ -9,7 +9,8 @@ const read=name=>fs.readFileSync(path.join(root,name),"utf8");
 test("Browser shell loads multi-file and legacy PDF modes without a backend",()=>{
  const html=read("index.html");
  for(const file of ["zip-guard.js","formats-extra.js","universal-engine.js","metadata-extended.js","metadata-inspector.js","content-verifier.js","universal-ui.js"]){
-  assert.ok(html.includes('<script src="'+file+'"></script>'),file);
+  if(file==="exiftool-bridge.js")assert.ok(html.includes('<script src="exiftool-bridge.js?v=0.7.1"></script>'),file);
+  else assert.ok(html.includes('<script src="'+file+'"></script>'),file);
  }
  assert.ok(html.indexOf("formats-extra.js")<html.indexOf("universal-engine.js"));
  assert.ok(html.indexOf("zip-guard.js")<html.indexOf("universal-engine.js"));
