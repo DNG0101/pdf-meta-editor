@@ -4,7 +4,7 @@ Local-first, GitHub Pages compatible file metadata analysis and conservative rem
 
 ## Modes
 
-- **All files:** inspect local files, detect format signatures, **show parsed field names, actual values and sources** where supported, remove known metadata where supported, verify output by reinspection, batch-clean files, and export JSON reports.
+- **All files:** automatically inspect files on selection, detect format signatures, **show parsed field names, actual values and sources** where supported, remove known metadata where supported, verify output by reinspection, batch-clean files, and export JSON reports.
 - **Advanced PDF:** detailed inspection and editing of the eight supported writable Info fields (Title, Author, Subject, Keywords, Creator, Producer, CreationDate and ModDate). Other values are read-only.
 
 ## Format-specific cleanup
@@ -24,6 +24,14 @@ Local-first, GitHub Pages compatible file metadata analysis and conservative rem
 | Unknown formats and generic ZIP | None | Inspection-only, never falsely claim to be cleaned |
 
 Formats are detected using file magic and relevant package structure, not filenames alone.
+
+## Automatic inspection and GIF field visibility
+
+Selecting or dropping files in **All files** mode now starts inspection automatically. **Queued for inspection** means the file has not been processed yet; only **Inspected**, **Unsupported / inspect only**, or **Error** is a finished inspection status. You can still manually select **Inspect files** to repeat the operation.
+
+For animated GIFs, the inspector additionally reports the logical canvas width/height, GIF version, frame count, declared frame durations, transparency-frame count, looping instructions, several frame geometries, recognized comment and XMP application metadata, and unknown application-extension IDs. The table separates **Technical** file properties from **Metadata** fields. GIF technical details do not imply personally identifying metadata is present, and an absence of recognized metadata fields does **not** establish that all metadata or embedded watermarks are absent.
+
+The GIF cleaner removes only supported comment and XMP application extensions. It preserves animation, palette, frames, looping and unrecognized application extensions. A GIF without removable blocks is not exported as a falsely "cleaned" file.
 
 ## Field-level inspection and verification
 
