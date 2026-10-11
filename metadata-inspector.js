@@ -28,7 +28,7 @@ function inspect(a,name="",deps={}){
  }
  const ctx={add,warnings};
  if(format==="jpeg")jpeg(a,ctx);
- else if(format==="png")png(a,ctx);
+ else if(format==="png")return png(a,ctx).then(()=>finish(format,fields,warnings));
  else if(format==="webp")webp(a,ctx);
  else if(format==="mp3")mp3(a,ctx);
  else if(format==="wav")wav(a,ctx);
@@ -120,7 +120,25 @@ function jpeg(a,ctx){
  ctx.add("JPEG scans",scanCount,"JPEG structure");
  ctx.warnings.push("JPEG EXIF orientation and ICC can affect rendering; output display fidelity is not automatically verified.");
 }
-function png(a,ctx){
+async function inflatePNGText(data,ctx,name){
+ const max=256*1024;
+ if(data.length>max){ctx.warnings.push(name+" compressed source exceeds 256 KiB decoding budget");return null;}
+ if(typeof DecompressionStream==="undefined"||typeof Blob==="undefined"){
+  ctx.warnings.push(name+" compressed text cannot be decoded in this browser");return null;
+ }
+ try{
+  const stream=new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate"));
+  const reader=stream.getReader(),chunks=[];let total=0;
+  for(;;){
+   const {value,done}=await reader.read();if(done)break;
+   total+=value.length;
+   if(total>max){await reader.cancel().catch(()=>{});ctx.warnings.push(name+" expanded text exceeds 256 KiB decoding budget");return null;}
+   chunks.push(value);
+  }
+  return join(chunks);
+ }catch(e){ctx.warnings.push(name+" text could not be decompressed safely");return null;}
+}
+async function png(a,ctx){
  let p=8;
  while(p+12<=a.length){
   const n=be32(a,p),type=ascii(a,p+4,4),from=p+8,end=from+n;
@@ -128,11 +146,17 @@ function png(a,ctx){
   const v=a.subarray(from,end);
   if(type==="IHDR"&&n===13){ctx.add("Width",be32(v,0),"PNG IHDR");ctx.add("Height",be32(v,4),"PNG IHDR");ctx.add("Bit depth",v[8],"PNG IHDR");}
   if(type==="tEXt"){const i=v.indexOf(0);if(i>0)ctx.add(utf8(v.subarray(0,i)),utf8(v.subarray(i+1)),"PNG tEXt");}
-  if(type==="zTXt"){const i=v.indexOf(0);ctx.add("Compressed text "+(i>0?utf8(v.subarray(0,i)):""),"Present, compressed; not decoded","PNG zTXt");}
+  if(type==="zTXt"){
+   const i=v.indexOf(0);
+   if(i<=0||i+2>v.length||v[i+1]!==0)throw Error("Invalid PNG zTXt header");
+   const uncompressed=await inflatePNGText(v.subarray(i+2),ctx,"PNG zTXt");
+   ctx.add(ascii(v,0,i),uncompressed?ascii(uncompressed):"Present, compressed; decoding unavailable","PNG zTXt");
+  }
   if(type==="iTXt"){
    const i=v.indexOf(0);if(i>0&&i+2<v.length){
     const k=utf8(v.subarray(0,i)),compressed=v[i+1]===1;let at=i+3;
-    const l=v.indexOf(0,at);if(l>=0){at=l+1;const t=v.indexOf(0,at);if(t>=0){at=t+1;ctx.add(k,compressed?"Present, compressed; not decoded":utf8(v.subarray(at)),"PNG iTXt");}}
+    const l=v.indexOf(0,at);if(l>=0){at=l+1;const t=v.indexOf(0,at);if(t>=0){at=t+1;const payload=compressed?await inflatePNGText(v.subarray(at),ctx,"PNG iTXt"):v.subarray(at);
+     ctx.add(k,payload?utf8(payload):"Present, compressed; decoding unavailable","PNG iTXt");}}
    }
   }
   if(type==="eXIf")tiff(v,ctx,"PNG eXIf");
