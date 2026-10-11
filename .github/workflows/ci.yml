@@ -1,17 +1,43 @@
 name: Verify file metadata suite
+
+# Test changes before merge, then verify the exact main-branch commit.
+# Do not run an extra push workflow for every intermediate feature commit.
 on:
-  push:
-    branches: [main, feature/universal-file-metadata]
   pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# An updated pull request supersedes its previous in-progress test run.
+# Main branch runs are never cancelled by this rule.
+concurrency:
+  group: verification-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
 jobs:
-  test:
+  verify:
+    name: Node ${{ matrix.node }}
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', '24']
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Check out source
+        uses: actions/checkout@v7
         with:
-          node-version: '22'
-      - run: npm install --no-audit --no-fund
-      - run: npm run verify
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          package-manager-cache: false
+      - name: Install test dependencies
+        run: npm install --no-audit --no-fund
+      - name: Verify syntax and all tests
+        run: npm run verify
