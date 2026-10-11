@@ -19,6 +19,7 @@ test("Universal UI displays true parsed metadata values with HTML escaping and c
  const dom=new JSDOM(read("index.html"),{url:"http://localhost:8080/",runScripts:"outside-only"});
  const w=dom.window,d=w.document;
  try{
+  w.TextDecoder=TextDecoder;w.TextEncoder=TextEncoder;
   Object.defineProperty(w.crypto,"subtle",{configurable:true,value:{digest:async()=>new ArrayBuffer(32)}});
   for(const script of ["zip-guard.js","formats-extra.js","universal-engine.js","metadata-inspector.js","universal-ui.js"])w.eval(read(script));
   const bytes=fixture();
@@ -28,7 +29,7 @@ test("Universal UI displays true parsed metadata values with HTML escaping and c
   d.getElementById("u-inspect").click();
   await waitFor(()=>d.getElementById("u-progress").textContent.startsWith("Inspection finished."));
   const fieldArea=d.getElementById("u-fields");
-  assert.match(fieldArea.textContent,/Author/);
+  assert.match(fieldArea.textContent,/Author/,d.getElementById("u-details").textContent);
   assert.match(fieldArea.textContent,/Alice <script>alert\(1\)<\/script>/);
   assert.equal(fieldArea.querySelectorAll("script").length,0,"metadata content must not execute as HTML");
   assert.match(fieldArea.textContent,/12/);
