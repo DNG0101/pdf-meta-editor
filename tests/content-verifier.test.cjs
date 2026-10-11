@@ -1,5 +1,6 @@
 "use strict";
 const {test}=require("node:test"),assert=require("node:assert/strict");
+const {deflateSync}=require("node:zlib");
 const JSZip=require("jszip"),PDFLib=require("pdf-lib");
 const {JSDOM}=require("jsdom");
 global.FileMetaZipGuard=require("../zip-guard.js");
@@ -71,4 +72,20 @@ test("Office entries are compared by actual uncompressed bytes",async()=>{
 });
 test("Unknown files cannot be certified",async()=>{
  await assert.rejects(()=>V.verify(str("hello"),str("hello"),"unknown"),/No content preservation verifier/);
+});
+
+test("PNG zTXt and compressed iTXt reveal real metadata values and then cleanly disappear",async()=>{
+ const txt=str("Encoded author"),compressed=deflateSync(txt);
+ const z=cat(str("Author"),[0,0],compressed);
+ const intl=cat(str("Description"),[0,1,0,0,0],compressed);
+ const a=cat([137,80,78,71,13,10,26,10],
+  crc("IHDR",cat(be(2),be(2),[8,2,0,0,0])),
+  crc("zTXt",z),crc("iTXt",intl),crc("IDAT",[1,2]),crc("IEND",[]));
+ const before=await I.inspect(a,"compressed.png");
+ assert.equal(before.fields.find(x=>x.name==="Author")?.value,"Encoded author");
+ assert.equal(before.fields.find(x=>x.name==="Description")?.value,"Encoded author");
+ const b=(await E.process(a,"compressed.png",{remove:true})).bytes;
+ const after=await I.inspect(b,"compressed.png");
+ assert.equal(after.fields.some(x=>x.name==="Author"||x.name==="Description"),false);
+ assert.equal((await V.verify(a,b,"png")).preserved,true);
 });
