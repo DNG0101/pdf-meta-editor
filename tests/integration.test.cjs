@@ -22,16 +22,17 @@ test("PDF Info properties are removed and page integrity survives rewrite",async
  assert.equal(check.count,0);
  const reopened=await PDFLib.PDFDocument.load(cleaned.bytes,{updateMetadata:false});
  assert.equal(reopened.getPageCount(),1);
+ assert.equal(reopened.context.trailerInfo.Info,undefined);
  assert.equal(reopened.getTitle(),undefined);
  assert.equal(reopened.getAuthor(),undefined);
- assert.equal(reopened.context.trailerInfo.Info,undefined);
 });
 test("Signed PDF marker causes fail-closed response",async()=>{
  const doc=await PDFLib.PDFDocument.create();doc.addPage([200,200]);
  const original=new Uint8Array(await doc.save());
  // Appending a marker in an incremental-looking tail is enough to force rejection.
- const bytes=new Uint8Array(original.length+15);bytes.set(original);
- bytes.set(new TextEncoder().encode("\n% /ByteRange []\n"),original.length);
+ const marker=new TextEncoder().encode("\n% /ByteRange []\n");
+ const bytes=new Uint8Array(original.length+marker.length);bytes.set(original);
+ bytes.set(marker,original.length);
  await assert.rejects(()=>E.process(bytes,"signed.pdf",{remove:true,pdfLib:PDFLib}),/signature/i);
 });
 test("DOCX properties and relationships are physically removed",async()=>{
