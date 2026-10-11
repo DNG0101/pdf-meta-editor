@@ -86,6 +86,17 @@ Specific corrections in this version:
 - Unsupported formats remain inspection-only; the cleaner never claims universal operation.
 - SynthID or other content-embedded identifiers are **not tested or removed by this tool**. Use a trusted, format-appropriate detector for any claim about their presence; ordinary metadata stripping cannot prove absence.
 
+## Robustness fixes (v0.6.1)
+
+- **PNG:** CRC validation is complemented by IHDR/IDAT/IEND existence, ordering, image-header sanity, palette rules and unknown critical-chunk refusal. Incorrectly structured PNGs are rejected rather than advertised as clean.
+- **MP3:** Detects supported MPEG frame headers and refuses metadata removal if the remaining stream does not start with a supported audio frame. Free-format MPEG streams and unsupported ID3 layouts require a specialized parser.
+- **Metadata accuracy:** Repeated identical metadata fields are preserved as distinct occurrences; EXIF/TIFF inspection includes more standard tags and limited binary value previews. Field inspection remains bounded and is **not** complete across all possible embedded/proprietary structures.
+- **Cleaner results:** After successful cleanup, the metadata table shows fields found in the **cleaned output**, with the original/removed values tracked separately. Diffs count duplicate values correctly.
+- **Browser compatibility:** SHA-256 unavailable in insecure or restricted browser contexts no longer prevents file inspection. Reports distinguish unsupported formats, unchanged files, verification outcomes and errors, and include browser-supplied file MIME/last-modified properties (not embedded metadata).
+- **Testing:** New regression cases exercise malformed PNG layouts, unknown critical chunks, fake MPEG payloads, repeated EXIF-style metadata, missing hashing APIs and cleaned-output display.
+
+None of these changes establishes zero errors, universal metadata removal or absence of content-level SynthID. Original files are never overwritten.
+
 ## Safeguards and limitations
 
 - Original files are never overwritten.
