@@ -19,6 +19,27 @@ function identify(a,name=""){
  if(a.length>=4&&decode(a,0,2)==="PK"&&(a[2]===3||a[2]===5||a[2]===7)&&[4,6,8].includes(a[3]))return "zip";
  return "unknown";
 }
+// Removing EXIF orientation without rotating the pixels changes display orientation.
+// Refuse that case until a lossless orientation-normalizer is available.
+function guardedExifOrientation(a){
+ if(a.length<8)throw Error("Incomplete EXIF TIFF header");
+ const endian=decode(a,0,2);
+ if(endian!=="II"&&endian!=="MM")throw Error("Invalid EXIF TIFF header");
+ const little=endian==="II";
+ const u16=p=>{if(p<0||p+2>a.length)throw Error("Truncated EXIF value");return little?a[p]|(a[p+1]<<8):(a[p]<<8)|a[p+1];};
+ const u32=p=>{if(p<0||p+4>a.length)throw Error("Truncated EXIF offset");return little?le32(a,p):be32(a,p);};
+ if(u16(2)!==42)throw Error("Unsupported EXIF TIFF layout");
+ const offset=u32(4);if(offset<8||offset+2>a.length)throw Error("Invalid EXIF IFD offset");
+ const n=u16(offset);if(n>512||offset+2+n*12+4>a.length)throw Error("Truncated EXIF IFD");
+ for(let i=0;i<n;i++){
+  const p=offset+2+i*12,tag=u16(p);
+  if(tag===0x0112){if(u16(p+2)!==3||u32(p+4)!==1)throw Error("Unsupported EXIF orientation entry");
+   const value=u16(p+8);if(value<1||value>8)throw Error("Invalid EXIF orientation");
+   return value;
+  }
+ }
+ return 1;
+}
 function jpeg(a,strip){
  let p=2,count=0,removed=[],parts=[a.subarray(0,2)],foundEnd=false;
  while(p<a.length){
@@ -39,6 +60,7 @@ function jpeg(a,strip){
   const size=(a[p]<<8)|a[p+1];if(size<2||p+size>a.length)throw Error("Invalid JPEG segment length");
   const end=p+size;
   const isMeta=marker===0xe1||marker===0xed||marker===0xfe;
+   if(strip&&marker===0xe1&&decode(a,p+2,6)==="Exif\0\0"&&guardedExifOrientation(a.subarray(p+8,end))!==1)throw Error("EXIF orientation is not 1; removing it would change the displayed image orientation");
   if(isMeta){count++;if(strip)removed.push("JPEG "+marker.toString(16).toUpperCase());}
   if(!strip||!isMeta)parts.push(a.subarray(start,end));
   p=end;
@@ -56,7 +78,9 @@ function png(a,strip){
   const len=be32(a,p),type=decode(a,p+4,4),end=p+12+len;
   if(len>a.length-p-12)throw Error("Invalid PNG chunk length");
   if(crc32(a.subarray(p+4,p+8+len))!==be32(a,p+8+len))throw Error("PNG chunk CRC mismatch; refusing to process damaged file");
-  const isMeta=drop.has(type);if(isMeta){count++;if(strip)removed.push(type);}
+  const isMeta=drop.has(type);
+   if(strip&&type==="eXIf"&&guardedExifOrientation(a.subarray(p+8,p+8+len))!==1)throw Error("PNG EXIF orientation is not 1; refusing appearance-changing metadata removal");
+   if(isMeta){count++;if(strip)removed.push(type);}
   if(!strip||!isMeta)parts.push(a.subarray(p,end));
   p=end;
   if(type==="IEND"){endSeen=true;if(p!==a.length)throw Error("Trailing data after PNG IEND requires manual review");break;}
@@ -64,6 +88,7 @@ function png(a,strip){
  if(!endSeen)throw Error("Missing PNG IEND");
  return {count,removed,bytes:strip?concat(parts):a,notes:["Image pixels, ICC profiles, color management chunks and unknown ancillary chunks are preserved; invisible watermarks are not verified."]};
 }
+function asciiExif(a){return decode(a,0,6)==="Exif\0\0"?a.subarray(6):a;}
 function webp(a,strip){
  if(le32(a,4)+8!==a.length)throw Error("Invalid WebP RIFF length");
  let p=12,count=0,removed=[],parts=[a.subarray(12,12)],chunks=[],hasVP8X=false;
@@ -73,7 +98,11 @@ function webp(a,strip){
   if(len>a.length-p-8||end>a.length)throw Error("Invalid WebP chunk size");
   let chunk=a.subarray(p,end);
   if(type==="VP8X"){hasVP8X=true;if(len<10)throw Error("Invalid WebP VP8X chunk");if(strip){chunk=chunk.slice();chunk[8]&=~0x0c;}}
-  if(type==="EXIF"||type==="XMP "){count++;if(strip)removed.push(type.trim());}
+  if(type==="EXIF"&&strip){
+    const exif=asciiExif(a.subarray(p+8,p+8+len));
+    if(guardedExifOrientation(exif)!==1)throw Error("WebP EXIF orientation is not 1; refusing appearance-changing metadata removal");
+   }
+   if(type==="EXIF"||type==="XMP "){count++;if(strip)removed.push(type.trim());}
   else chunks.push(chunk);
   p=end;
  }
