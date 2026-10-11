@@ -18,6 +18,9 @@ Local-first, GitHub Pages compatible file metadata analysis and conservative rem
 | WAV | LIST/INFO, BEXT, iXML, AXML, CART, DISP, ID3, XMP | Other RIFF chunks and audio preserved |
 | PDF | Info dictionary and catalog XMP | **Partial removal only**; signed PDFs refused; nested metadata can remain |
 | DOCX/XLSX/PPTX | Standard docProps and package relationships | Embedded objects/content are NOT sanitized; signed Office ZIP packages refused |
+| GIF | Comment and XMP application extension | Animation, looping, palettes, graphic controls and unknown application blocks preserved |
+| FLAC | Vorbis comments and embedded picture blocks | STREAMINFO, audio frames and other metadata blocks preserved |
+| TIFF, BMP, OGG, MP4/MOV, HEIC/AVIF, SVG, 7z, RAR, gzip, EXE/ELF | None | Signature-based inspection only, no content modification |
 | Unknown formats and generic ZIP | None | Inspection-only, never falsely claim to be cleaned |
 
 Formats are detected using file magic and relevant package structure, not filenames alone.
@@ -30,6 +33,8 @@ Formats are detected using file magic and relevant package structure, not filena
 
 - Original files are never overwritten.
 - Invalid inputs fail without reporting a false clean result.
+- Office ZIP files undergo central-directory preflight before decompression (entry, path, ratio and expanded-size limits). This reduces, but does not eliminate, archive bomb risk.
+- Cleaning controls include cancellation between files, a 384 MiB aggregate batch budget and unique output names.
 - Digital signatures can be invalidated by rewrites; suspected signed PDFs and signed Office packages are rejected.
 - Batch output is ZIP packaged if more than one file changes.
 - Local browser safety limit: 256 MiB per file; peak memory use can be higher.
@@ -42,5 +47,7 @@ Formats are detected using file magic and relevant package structure, not filena
 Serve this directory over HTTP (for example: python3 -m http.server 8080), then open http://localhost:8080.
 
 Node.js 22+ commands: npm install; npm run verify.
+
+Verification includes JPEG/PNG/WebP/MP3/WAV/GIF/FLAC byte-structure fixtures, PDF and Office reinspection, malicious ZIP resource bounds and browser UI smoke checks. Test success is not universal compatibility certification.
 
 Each new file format must be implemented with a real parser, a format-specific cleaner, and a post-clean validation step. Never blindly replace byte sequences in arbitrary files.
