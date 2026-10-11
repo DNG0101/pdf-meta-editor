@@ -23,6 +23,7 @@
   "https://raw.githubusercontent.com/6over3/zeroperl-ts/5e12fb86cebf09795c32befa390718b3d8ddd3e7/zeroperl.wasm"
  ];
  const MAX_WASM=64*1048576;
+ const WASM_SHA256="a6ae97f184fabc444b0b70d77c3d16475bfb3de16ebfb58ab8b2fbf98a53835e";
  let wasmBinaryPromise=null;
  const wasmMagic=[0,97,115,109,1,0,0,0];
  function isWasm(bytes){
@@ -57,6 +58,13 @@
     }
     if(typeof WebAssembly!=="undefined"&&typeof WebAssembly.validate==="function"&&!WebAssembly.validate(binary))
      throw Error("WASM magic is present, but WebAssembly.validate rejected the binary");
+    const expected=opts.expectedSha256===undefined?WASM_SHA256:opts.expectedSha256;
+    if(expected){
+     if(typeof crypto==="undefined"||!crypto.subtle?.digest)throw Error("SHA-256 verification unavailable in this browser");
+     const hash=new Uint8Array(await crypto.subtle.digest("SHA-256",binary));
+     const digest=Array.from(hash,n=>n.toString(16).padStart(2,"0")).join("");
+     if(digest!==expected)throw Error("WASM integrity mismatch: expected pinned SHA-256, received "+digest);
+    }
     return {binary,url};
    }catch(e){
     failures.push(url+": "+String(e?.message||e).slice(0,180));
@@ -155,5 +163,5 @@
   return {...info,engine:"ExifTool WASM (experimental)",args,
    warnings:[...info.warnings,"ExifTool extracted known and requested unknown tags; this is not a guarantee of all metadata or SynthID absence."]};
  }
- return {scan,fromJson,normalize,loadWasm,wasmUrl:CDN,wasmSources:WASM_URLS.slice(),fetchCheckedWasm,checkedWasmResponse,isWasm};
+ return {scan,fromJson,normalize,loadWasm,wasmUrl:CDN,wasmSources:WASM_URLS.slice(),wasmSha256:WASM_SHA256,fetchCheckedWasm,checkedWasmResponse,isWasm};
 });
