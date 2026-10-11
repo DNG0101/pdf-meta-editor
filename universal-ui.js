@@ -229,7 +229,7 @@ async function deepScan(){
   r.deepStatus="Deep scan running";$("u-progress").textContent="ExifTool analyzing: "+r.name;refresh();
   try{
    const output=await FileMetaExifTool.scan(r.file);
-   r.deepInspection=output;r.deepStatus="ExifTool extracted";ok++;
+   r.deepInspection=output;r.deepStatus="ExifTool extracted";delete r.deepError;ok++;
   }catch(e){
    r.deepStatus="ExifTool unavailable/error";r.deepError=String(e?.message||e).slice(0,600);failed++;
    r.deepInspection={fields:[],warnings:["ExifTool WASM failed: "+r.deepError,"The built-in inspection results remain available."],coverage:"ExifTool not completed"};
