@@ -8,11 +8,12 @@ const root=path.resolve(__dirname,"..");
 const read=name=>fs.readFileSync(path.join(root,name),"utf8");
 test("Browser shell loads multi-file and legacy PDF modes without a backend",()=>{
  const html=read("index.html");
- for(const file of ["zip-guard.js","formats-extra.js","universal-engine.js","universal-ui.js"]){
+ for(const file of ["zip-guard.js","formats-extra.js","universal-engine.js","metadata-inspector.js","content-verifier.js","universal-ui.js"]){
   assert.ok(html.includes('<script src="'+file+'"></script>'),file);
  }
  assert.ok(html.indexOf("formats-extra.js")<html.indexOf("universal-engine.js"));
  assert.ok(html.indexOf("zip-guard.js")<html.indexOf("universal-engine.js"));
+ assert.ok(html.indexOf("content-verifier.js")<html.indexOf("universal-ui.js"));
  const dom=new JSDOM(html,{url:"http://localhost:8080/",runScripts:"outside-only"});
  const w=dom.window;
  w.eval(read("universal-ui.js"));
