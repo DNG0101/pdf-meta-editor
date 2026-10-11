@@ -162,6 +162,10 @@ async function pdf(a,strip,pdfLib){
  if(!count)return {format:"pdf",count:0,removed:[],bytes:a,notes};
  doc.context.trailerInfo.Info=undefined;
  doc.catalog.delete(pdfLib.PDFName.of("Metadata"));
+ // Drop detached objects from the writer context too; deleting references alone
+ // can leave their original metadata bytes in a rewritten output.
+ if(info instanceof pdfLib.PDFRef)doc.context.delete(info);
+ if(meta instanceof pdfLib.PDFRef)doc.context.delete(meta);
  const bytes=await doc.save({useObjectStreams:true});
  const check=await pdfLib.PDFDocument.load(bytes,{updateMetadata:false});
  if(check.context.trailerInfo.Info||check.catalog.get(pdfLib.PDFName.of("Metadata")))throw Error("PDF metadata-removal verification failed");
