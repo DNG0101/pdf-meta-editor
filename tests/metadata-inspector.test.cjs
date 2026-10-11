@@ -19,11 +19,11 @@ function pngChunk(type,v){
  return join(be(v.length),text(type),v,be((crc^0xffffffff)>>>0));
 }
 const png=(...chunks)=>join([137,80,78,71,13,10,26,10],...chunks);
-function jpegExif(){
+function jpegExif(orientation=1){
  // Little-endian TIFF: Make="Nikon"; Orientation=1
  const tiff=join(text("II"),[42,0],[8,0,0,0],[2,0],
  [0x0f,1,2,0,6,0,0,0,38,0,0,0],
- [0x12,1,3,0,1,0,0,0,1,0,0,0],
+ [0x12,1,3,0,1,0,0,0,orientation,0,0,0],
  [0,0,0,0],text("Nikon\0"));
  return join([255,216,255,225,0,tiff.length+8],text("Exif\0\0"),tiff,[255,218,0,6,1,1,0,0,63,0,0,255,217]);
 }
@@ -106,4 +106,18 @@ test("Unrecognized files never claim universal inspection or invisible watermark
  const info=await I.inspect(text("hello, world"),"any.bin");
  assert.equal(info.format,"unknown");assert.deepEqual(info.fields,[]);
  assert.match(info.coverage,/Partial/);assert.match(info.watermarkStatus,/Not assessed/);
+});
+
+test("Non-default JPEG EXIF orientation is preserved by refusing unsafe cleanup",async()=>{
+ const rotated=jpegExif(6);
+ const info=await I.inspect(rotated,"camera.jpg");
+ assert.equal(info.fields.find(f=>f.name==="IFD0 Orientation")?.value,"6");
+ await assert.rejects(()=>FileMetaEngine.process(rotated,"camera.jpg",{remove:true}),/orientation/);
+});
+test("Non-default PNG EXIF orientation is protected",async()=>{
+ const rotatedExif=jpegExif(8).subarray(12,56);
+ const img=png(pngChunk("IHDR",join(be(2),be(2),[8,2,0,0,0])),pngChunk("eXIf",rotatedExif),pngChunk("IDAT",[1,2]),pngChunk("IEND",[]));
+ const info=await I.inspect(img,"pic.png");
+ assert.equal(info.fields.find(f=>f.name==="IFD0 Orientation")?.value,"8");
+ await assert.rejects(()=>FileMetaEngine.process(img,"pic.png",{remove:true}),/orientation/);
 });
