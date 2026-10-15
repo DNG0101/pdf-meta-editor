@@ -33,8 +33,8 @@ shell.innerHTML=[
 '<p class="u-note" id="u-progress" role="status" aria-live="polite">Select files to begin.</p>',
 '<section class="u-panel"><h3>File inspection and cleaning</h3><div style="overflow-x:auto"><table class="u-table"><thead><tr><th>File</th><th>Format</th><th>Removable blocks detected</th><th>Status</th></tr></thead><tbody id="u-rows"></tbody></table></div></section>',
 '<section class="u-panel"><h3>Extracted metadata fields</h3><div class="u-note" style="padding:10px 16px">Expand a file to view parsed metadata names, values and source structures. Coverage is partial; compressed or unknown metadata may remain.</div><div style="padding:0 16px 12px"><label for="u-filter" class="u-note">Search all extracted fields</label><input id="u-filter" type="search" placeholder="Search metadata, technical values or source..." style="width:100%;padding:10px;border:1px solid #a5b8cf;border-radius:8px" /></div><div id="u-fields"></div></section>',
-'<section class="u-panel"><h3>ExifTool deep metadata (optional)</h3><div class="u-note" style="padding:10px 16px">Click <strong>Deep ExifTool scan</strong> to run an experimental browser WebAssembly port of ExifTool. Its code/WASM initially downloads from a third-party CDN; selected files are processed locally. Alternatively, import ExifTool JSON containing matching SourceFile filenames. These are inspection-only capabilities and do not certify complete metadata or SynthID removal.</div><div id="u-exif-results"></div></section>',
-'<section class="u-panel"><h3>Detailed results & warnings</h3><pre class="u-report" id="u-details">No files selected.</pre></section>'
+'<section class="u-panel"><h3>ExifTool deep metadata · original selected files (optional)</h3><div class="u-note" style="padding:10px 16px">Click <strong>Deep ExifTool scan</strong> to run an experimental browser WebAssembly port of ExifTool. Its code/WASM initially downloads from a third-party CDN; selected files are processed locally. Alternatively, import ExifTool JSON containing matching SourceFile filenames. These are inspection-only capabilities and do not certify complete metadata or SynthID removal.</div><div id="u-exif-results"></div></section>',
+'<details class="u-panel"><summary style="padding:15px">Format capabilities</summary><p style="padding:15px">PDF: core Info editing; Info/catalog XMP cleaning. JPEG/PNG/WebP/GIF/MP3/WAV/FLAC: selected metadata blocks only. DOCX/XLSX/PPTX: document properties only. TIFF/HEIC/AVIF/MP4/MOV/OGG and other recognized formats: inspection only. Unknown formats: no verified cleaner. No format is certified free of all metadata or watermarks.</p></details><label class="u-note"><input id="u-recheck-deep" type="checkbox" /> Run ExifTool on cleaned outputs before download (requires its runtime)</label><section class="u-panel"><h3>Detailed results & warnings</h3><pre class="u-report" id="u-details">No files selected.</pre></section>'
 ].join("");
 header.parentNode.insertBefore(shell,main);main.style.display="none";
 var $=id=>document.getElementById(id);
@@ -131,7 +131,10 @@ async function run(clean){
    for(let j=i;j<results.length;j++)results[j].status="Canceled";
    break;
   }
-  const r=results[i];r.status=clean?"Cleaning":"Inspecting";$("u-progress").textContent=(i+1)+"/"+results.length+": "+r.name;refresh();
+  const r=results[i];
+  for(const key of ['remainingFields','remainingFieldWarnings','remainingFieldCounts','metadataDiff','contentVerification','outputSize','outputSha256','changed','outputDeepInspection'])delete r[key];
+  const started=performance.now();
+  r.status=clean?"Cleaning":"Inspecting";$("u-progress").textContent=(i+1)+"/"+results.length+": "+r.name;refresh();
   try{
    const data=await bytesOf(r);
    if(typeof FileMetaInspector==="undefined"||typeof FileMetaVerifier==="undefined")throw Error("Metadata inspector/verifier unavailable; refusing to certify results");
@@ -141,7 +144,12 @@ async function run(clean){
    r.metadataCoverage=inspected.coverage;
    r.metadataFieldCounts=inspected.fieldCounts;
    r.metadataLimits=inspected.limits;
-   r.format=inspected.format;refresh();
+   r.format=inspected.format;
+   if(r.format==='pdf'&&window.FileMetaPDF&&pdfLib){
+    const diagnosticDoc=await pdfLib.PDFDocument.load(data,{updateMetadata:false});
+    r.pdfObjectInventory=FileMetaPDF.inventory(diagnosticDoc,pdfLib);
+   }
+   refresh();
    const out=await FileMetaEngine.process(data,r.name,{remove:clean,zipLib,pdfLib});
    r.format=out.format;r.count=out.count;r.notes=out.notes||[];r.removed=out.removed;r.verification=out.verification;
    r.sha256=await hash(data);
@@ -181,6 +189,11 @@ async function run(clean){
     r.status="Known tags rechecked";r.changed=true;r.outputSize=out.bytes.length;
     r.verification="Known removable blocks absent, retained content "+integrity.level+" and selected structure rechecked; hidden metadata and SynthID NOT certified absent";
     r.outputSha256=await hash(out.bytes);
+    if($("u-recheck-deep").checked){
+     if(!window.FileMetaExifTool)throw Error("ExifTool output verification requested but unavailable");
+     r.outputDeepInspection=await FileMetaExifTool.scan(new File([out.bytes],r.name));
+     r.outputDeepInspection.scope="Cleaned output; remaining tags are informational, not proof of complete removal";
+    }
     const safeName=r.name.replace(/[\\/\x00-\x1f]/g,"_").slice(0,180)||"unnamed";
     const base=safeName.replace(/([.][^.]+)?$/,(_,extension)=>"_metadata-removed"+(extension||""));
     let fileName=base,number=2;
@@ -189,6 +202,7 @@ async function run(clean){
     outputs.push({filename:fileName,bytes:out.bytes});
    }else r.status=clean?"No known removable blocks":"Inspected";
   }catch(e){
+    window.FileMetaDiagnostics?.record(clean?"clean-error":"inspect-error",{message:e.message,stack:e.stack,format:r.format,size:r.size});
     r.status="Error: "+(e.message||String(e));
     r.notes=[r.status];
     if(r.format==="Detecting"||r.format==="Pending"){
@@ -199,6 +213,7 @@ async function run(clean){
       }catch(_){r.format="Unknown";}
     }
   }
+  window.FileMetaDiagnostics?.record(clean?"clean":"inspect",{format:r.format,size:r.size,status:r.status,durationMs:Math.round(performance.now()-started)});
   refresh();
  }
  let packageError="";
@@ -231,7 +246,7 @@ async function deepScan(){
    const output=await FileMetaExifTool.scan(r.file);
    r.deepInspection=output;r.deepStatus="ExifTool extracted";delete r.deepError;ok++;
   }catch(e){
-   r.deepStatus="ExifTool unavailable/error";r.deepError=String(e?.message||e).slice(0,600);failed++;
+   r.deepStatus="ExifTool unavailable/error";r.deepError=String(e?.message||e).slice(0,600);window.FileMetaDiagnostics?.record("exif-error",{message:r.deepError});failed++;
    r.deepInspection={fields:[],warnings:["ExifTool WASM failed: "+r.deepError,"The built-in inspection results remain available."],coverage:"ExifTool not completed"};
   }
   refresh();
@@ -265,7 +280,7 @@ $("u-exif-json").onchange=()=>importExifReport();
 $("u-filter").oninput=()=>refresh();
 $("u-inspect").onclick=()=>run(false);
 $("u-clean").onclick=()=>run(true);
-$("u-cancel").onclick=()=>{if(busy){cancelRequested=true;$("u-progress").textContent="Cancellation requested; current operation will finish first.";refresh();}};
+$("u-cancel").onclick=()=>{if(busy){cancelRequested=true;window.FileMetaExifTool?.cancel?.();$("u-progress").textContent="Cancellation requested. Active ExifTool worker stops now; other current file work finishes first.";refresh();}};
 $("u-report").onclick=()=>{
  const doc={tool:"Local File Metadata Inspector",generatedAt:new Date().toISOString(),scope:"Parsed fields and verification evidence, subject to explicit safety limits",warning:"The field listing and cleanup cover only documented parser capabilities; unknown/internal metadata may remain. SynthID and invisible watermarks are NOT assessed and cannot be certified absent.",files:results.map(({file,...r})=>r)};
  download(new TextEncoder().encode(JSON.stringify(doc,null,2)),"metadata-report.json","application/json");

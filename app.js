@@ -5,6 +5,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc =
   "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
 // ── State ─────────────────────────────────────────────────────────────────────
+let pdfExportBusy = false;
 let currentBytes   = null;
 let currentFileName = "";
 let originalFields = {};   // { key: original string value (or "") }
@@ -23,7 +24,8 @@ dropzone.addEventListener("drop", (e) => {
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 async function handleFile(file) {
-  if (!file) return;
+  if (!file || pdfExportBusy) return;
+  if (file.size > 256*1048576) { showToast("PDF exceeds the 256 MiB safety limit", "error"); return; }
   if (!file.name.toLowerCase().endsWith(".pdf") && file.type !== "application/pdf") {
     showToast("Please upload a PDF file.", "error"); return;
   }
@@ -70,12 +72,22 @@ async function buildSections(file, buf) {
 
   // pdf-lib
   let libDoc = null;
-  try { libDoc = await PDFLib.PDFDocument.load(bytes, { ignoreEncryption: true }); } catch {}
+  try { libDoc = await PDFLib.PDFDocument.load(bytes, { updateMetadata: false }); } catch {}
 
   // pdfjs
   let pjsDoc = null;
   try { pjsDoc = await pdfjsLib.getDocument({ data: bytes.slice() }).promise; } catch {}
 
+  if (!libDoc && !pjsDoc) throw Error("PDF could not be parsed. It may be encrypted, damaged, or the PDF engines failed to load.");
+  let customInfoJSON = '{}';
+  if(libDoc){
+    const custom = Object.create(null),info=libDoc.context.lookup(libDoc.context.trailerInfo.Info);
+    if(info instanceof PDFLib.PDFDict)for(const [key,value] of info.entries()){
+      const name=key.decodeText();
+      if(!['Title','Author','Subject','Keywords','Creator','Producer','CreationDate','ModDate'].includes(name)&&typeof value.decodeText==='function')custom[name]=value.decodeText();
+    }
+    customInfoJSON=JSON.stringify(custom,null,2);
+  }
   // ── Core metadata ─────────────────────────────────────────────────────────
   let title="", author="", subject="", keywords="",
       creator="", producer="", creationDate="", modDate="";
@@ -319,8 +331,9 @@ async function buildSections(file, buf) {
         { key:"keywords",     label:"Keywords",               value: keywords,     pdfWritable: true, type:"textarea" },
         { key:"creator",      label:"Creator",                value: creator,      pdfWritable: true },
         { key:"producer",     label:"Producer",               value: producer,     pdfWritable: true },
-        { key:"creationDate", label:"Creation Date",          value: creationDate, pdfWritable: true },
-        { key:"modDate",      label:"Modification Date",      value: modDate,      pdfWritable: true },
+        { key:"creationDate", label:"Creation Date (UTC ISO)",          value: creationDate, pdfWritable: true },
+        { key:"modDate",      label:"Modification Date (UTC ISO)", value: modDate, pdfWritable: true },
+        { key:"customInfoJSON", label:"Custom Info JSON (string values; null deletes a key)", value: customInfoJSON, pdfWritable:true, type:"textarea" },
         { key:"trapped",      label:"Trapped Status",         value: "" },
         { key:"pdfVersion",   label:"PDF Version",            value: pdfVersion },
         { key:"language",     label:"Language",               value: "" },
@@ -365,11 +378,11 @@ async function buildSections(file, buf) {
       ]
     },
     {
-      id: "signatures", title: "5. Digital Signature Verification", icon: "pen",
+      id: "signatures", title: "5. Signature Indicators (not cryptographic verification)", icon: "pen",
       fields: [
         { key:"sigExists",    label:"Signature Exists",        value: sigExists },
         { key:"sigCount",     label:"Signature Count",         value: String(sigMatches.length) },
-        { key:"sigValidity",  label:"Signature Validity",      value: sigExists==="Yes" ? "Present (browser-level check only)" : "N/A" },
+        { key:"sigValidity",  label:"Signature Validity",      value: sigExists==="Yes" ? "Signature marker detected; validity not verified" : "N/A" },
         { key:"sigReason",    label:"Signature Reason",        value: sigReason },
         { key:"sigLocation",  label:"Signature Location",      value: sigLocation },
         { key:"sigContact",   label:"Signature Contact Info",  value: sigContact },
@@ -477,7 +490,7 @@ async function buildSections(file, buf) {
       ]
     },
     {
-      id: "compliance", title: "19. Compliance & Accessibility", icon: "check", color:"green",
+      id: "compliance", title: "19. Compliance & Accessibility Indicators (not validation)", icon: "check", color:"green",
       fields: [
         { key:"isTagged",     label:"Tagged PDF",              value: isTagged },
         { key:"isPdfA",       label:"PDF/A Compliance",        value: isPdfA },
@@ -490,7 +503,7 @@ async function buildSections(file, buf) {
       ]
     },
     {
-      id: "fraud", title: "20. Fraud / Tampering Indicators", icon: "alert", color:"danger",
+      id: "fraud", title: "20. Heuristic Signals (not proof of tampering)", icon: "alert", color:"danger",
       fields: [
         { key:"multiProducer",  label:"Multiple Producer Entries",  value: multiProducer },
         { key:"incrementalMods",label:"Incremental Modifications",  value: eofCount > 1 ? `Yes (${eofCount} EOF markers)` : "No" },
@@ -514,7 +527,7 @@ async function buildSections(file, buf) {
 function renderResults(fileName, sections) {
   document.getElementById("result-filename").textContent = fileName;
   document.getElementById("result-subtitle").textContent =
-    `${sections.length} categories · Only ✦ fields are editable and included in exported PDF`;
+    `${sections.length} categories · Only ✦ fields are editable. Info edits retain existing XMP, which may contain different values. Dates require UTC ISO format.`;
 
   const container = document.getElementById("sections-container");
   container.innerHTML = "";
@@ -570,7 +583,7 @@ function renderResults(fileName, sections) {
         ta.className = "field-textarea";
         ta.readOnly = !f.pdfWritable;
         if (ta.readOnly) { ta.title = "Inspection only; not writable to PDF"; ta.setAttribute("aria-readonly", "true"); }
-        ta.value = f.value ?? "";
+        ta.value = f.value || (f.pdfWritable ? "" : "Not assessed / unavailable");
         ta.placeholder = `Enter ${f.label.toLowerCase()}…`;
         ta.addEventListener("input", () => onFieldEdit(f.key, ta.value));
         valEl.appendChild(ta);
@@ -580,7 +593,7 @@ function renderResults(fileName, sections) {
         inp.className = "field-input";
         inp.readOnly = !f.pdfWritable;
         if (inp.readOnly) { inp.title = "Inspection only; not writable to PDF"; inp.setAttribute("aria-readonly", "true"); }
-        inp.value = f.value ?? "";
+        inp.value = f.value || (f.pdfWritable ? "" : "Not assessed / unavailable");
         inp.placeholder = `Enter ${f.label.toLowerCase()}…`;
         inp.addEventListener("input", () => onFieldEdit(f.key, inp.value));
         valEl.appendChild(inp);
@@ -637,33 +650,28 @@ function resetEdits() {
 
 // ── Download ──────────────────────────────────────────────────────────────────
 async function downloadPdf() {
-  if (!currentBytes) return;
+  if (!currentBytes || pdfExportBusy) return;
+  pdfExportBusy = true;
+  document.getElementById("btn-download2").disabled = true;
   const btn = document.getElementById("btn-download");
   btn.disabled = true; btn.textContent = "Preparing…";
   try {
-    const pdfDoc = await PDFLib.PDFDocument.load(currentBytes, { ignoreEncryption: true });
-
-    const pick = (key) => key in editedFields ? editedFields[key] : null;
-
-    const t = pick("title");   if (t !== null) pdfDoc.setTitle(t);
-    const a = pick("author");  if (a !== null) pdfDoc.setAuthor(a);
-    const s = pick("subject"); if (s !== null) pdfDoc.setSubject(s);
-    const k = pick("keywords");if (k !== null) pdfDoc.setKeywords(k.split(/[,;\n]+/).map(v => v.trim()).filter(Boolean));
-    const c = pick("creator"); if (c !== null) pdfDoc.setCreator(c);
-    const p = pick("producer");if (p !== null) pdfDoc.setProducer(p);
-    const cd = pick("creationDate");
-    if (cd) { try { const d=new Date(cd); if(!isNaN(d)) pdfDoc.setCreationDate(d); } catch {} }
-    const md = pick("modDate");
-    if (md) { try { const d=new Date(md); if(!isNaN(d)) pdfDoc.setModificationDate(d); } catch {} }
-
-    const newBytes = await pdfDoc.save();
+    const changes = {...editedFields};
+    const result = Object.keys(changes).length
+      ? await FileMetaPDF.edit(currentBytes, changes, PDFLib)
+      : {bytes: currentBytes, diagnostics: {operation: "pdf-download", verification: "Original bytes preserved; no changes requested"}};
+    const newBytes = result.bytes;
+    window.FileMetaDiagnostics?.record("pdf-export", result.diagnostics);
     const n = Object.keys(editedFields).length;
     const baseName = currentFileName.replace(/\.pdf$/i, "");
     triggerDownload(newBytes, n > 0 ? `${baseName}_edited.pdf` : currentFileName);
     showToast("PDF downloaded successfully!", "success");
   } catch (err) {
+    window.FileMetaDiagnostics?.record("pdf-export-error", {message: err.message, stack: err.stack});
     showToast("Download failed: " + err.message, "error");
   } finally {
+    pdfExportBusy = false;
+    document.getElementById("btn-download2").disabled = false;
     btn.disabled = false;
     updateEditCount();
   }
@@ -679,6 +687,7 @@ function triggerDownload(bytes, name) {
 
 // ── Clear ─────────────────────────────────────────────────────────────────────
 function clearAll() {
+  if (pdfExportBusy) return;
   currentBytes = null; currentFileName = ""; editedFields = {}; originalFields = {};
   show("upload-area"); hide("results-area"); hide("loading-area");
   document.getElementById("header-actions").style.display = "none";
@@ -708,7 +717,7 @@ function fmtBytes(n) {
 }
 function fmtDate(d) {
   if (!d || !(d instanceof Date) || isNaN(d.getTime())) return "";
-  return d.toISOString().replace("T"," ").slice(0,19);
+  return d.toISOString();
 }
 function parsePdfDate(raw) {
   if (!raw) return "";
@@ -793,3 +802,14 @@ window.handleFile  = handleFile;
 window.resetEdits  = resetEdits;
 window.downloadPdf = downloadPdf;
 window.clearAll    = clearAll;
+
+async function exportPdfAnalysis(){
+ if(!currentBytes||pdfExportBusy)return;
+ try{
+  const doc=await PDFLib.PDFDocument.load(currentBytes,{updateMetadata:false});
+  const report={version:'0.8.0',file:currentFileName,scope:'Original-file analysis; proposed edits are not yet applied. Includes potentially private metadata.',fields:originalFields,proposedEdits:editedFields,inventory:FileMetaPDF.inventory(doc,PDFLib),diagnostics:window.FileMetaDiagnostics?.report()};
+  const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));
+  const a=document.createElement('a');a.href=url;a.download='pdf-analysis.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+ }catch(e){showToast('Analysis export failed: '+e.message,'error');}
+}
+window.exportPdfAnalysis=exportPdfAnalysis;

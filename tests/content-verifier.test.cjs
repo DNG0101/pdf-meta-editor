@@ -56,7 +56,7 @@ test("GIF frames and FLAC samples are byte-preserved",async()=>{
 test("PDF validation honestly checks structure, not rendering",async()=>{
  const d=await PDFLib.PDFDocument.create();d.addPage([170,212]);d.setAuthor("Private");
  const a=new Uint8Array(await d.save()),b=(await E.process(a,"x.pdf",{remove:true,pdfLib:PDFLib})).bytes;
- const check=await V.verify(a,b,"pdf",{pdfLib:PDFLib});assert.equal(check.level,"structural-only");
+ const check=await V.verify(a,b,"pdf",{pdfLib:PDFLib});assert.equal(check.level,"object-graph-and-streams");
  const altered=await PDFLib.PDFDocument.load(b,{updateMetadata:false});altered.getPage(0).setSize(220,212);
  const changed=new Uint8Array(await altered.save());
  await assert.rejects(()=>V.verify(a,changed,"pdf",{pdfLib:PDFLib}),/geometry/);

@@ -45,8 +45,10 @@
   if(!get)throw Error("Browser fetch is unavailable, so the WASM runtime cannot be loaded");
   const failures=[];
   for(const url of (opts.urls||wasmAssetUrls(opts))){
+   const controller=new AbortController();
+   const timer=setTimeout(()=>controller.abort(),opts.timeoutMs||20000);
    try{
-    const resp=await get(url,{mode:"cors",cache:"force-cache"});
+    const resp=await get(url,{mode:"cors",cache:"force-cache",signal:controller.signal});
     if(!resp||!resp.ok)throw Error("HTTP "+(resp?.status??"no response"));
     const declared=Number(resp.headers?.get?.("content-length"));
     if(Number.isFinite(declared)&&declared>MAX_WASM)throw Error("WASM asset exceeds the 64 MiB safety limit");
@@ -68,7 +70,7 @@
     return {binary,url};
    }catch(e){
     failures.push(url+": "+String(e?.message||e).slice(0,180));
-   }
+   }finally{clearTimeout(timer);}
   }
   throw Error("Could not load a valid Zeroperl WebAssembly binary. A CDN or proxy is returning HTML instead of a .wasm file, or a network/CORS policy blocked the download. "+failures.join(" | ").slice(0,1600));
  }
@@ -143,7 +145,7 @@
   if(found.length!==1)throw Error("ExifTool JSON must contain exactly one SourceFile matching "+name);
   return normalize(found[0]);
  }
- async function scan(file,options={}){
+ async function scanDirect(file,options={}){
   if(!file||typeof file.name!=="string")throw Error("A selected browser File is required");
   if(file.size>256*1048576)throw Error("ExifTool deep inspection exceeds the configured 256 MiB per-file limit");
   const load=options.loader||loadWasm;
@@ -163,5 +165,21 @@
   return {...info,engine:"ExifTool WASM (experimental)",args,
    warnings:[...info.warnings,"ExifTool extracted known and requested unknown tags; this is not a guarantee of all metadata or SynthID absence."]};
  }
- return {scan,fromJson,normalize,loadWasm,wasmUrl:CDN,wasmSources:WASM_URLS.slice(),wasmSha256:WASM_SHA256,fetchCheckedWasm,checkedWasmResponse,isWasm};
+ let activeWorker=null;
+ function cancel(){if(activeWorker){activeWorker.cancel();activeWorker=null;}}
+ async function scan(file,options={}){
+  if(options.loader||typeof window==='undefined'||typeof Worker==='undefined')return scanDirect(file,options);
+  if(activeWorker)throw Error('Another ExifTool scan is already running');
+  return new Promise((resolve,reject)=>{
+   const worker=new Worker(new URL('exiftool-worker.js',document.baseURI));
+   let done=false;
+   const finish=(err,value)=>{if(done)return;done=true;clearTimeout(timer);worker.terminate();activeWorker=null;err?reject(err):resolve(value);};
+   const timer=setTimeout(()=>finish(Error('ExifTool scan exceeded 120 seconds; worker terminated')),120000);
+   activeWorker={cancel:()=>finish(Error('ExifTool scan canceled; worker terminated'))};
+   worker.onmessage=e=>e.data.error?finish(Error(e.data.error)):finish(null,e.data.result);
+   worker.onerror=e=>finish(Error(e.message||'ExifTool worker failed'));
+   try{worker.postMessage({file});}catch(e){finish(e);}
+  });
+ }
+ return {scan,scanDirect,cancel,fromJson,normalize,loadWasm,wasmUrl:CDN,wasmSources:WASM_URLS.slice(),wasmSha256:WASM_SHA256,fetchCheckedWasm,checkedWasmResponse,isWasm};
 });

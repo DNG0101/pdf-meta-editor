@@ -250,12 +250,9 @@ async function pdf(a,strip,pdfLib){
  const count=Number(Boolean(info))+Number(Boolean(meta));
  const notes=["Removes trailer Info and catalog XMP reference only; nested metadata, old revisions or content identifiers may remain.","Full rewriting can invalidate existing digital signatures and change byte-level document characteristics."];
  if(!strip)return {format:"pdf",count,removed:[],bytes:a,notes};
- // Conservative refusal: signatures require dedicated preservation/revision logic.
- const sigFields=doc.getForm().getFields().some(f=>f.constructor?.name==="PDFSignature");
- let hasByteRange=false;
- // Scan ASCII tokens, not PDF object semantics: conservative and intentionally may reject some harmless PDFs.
- for(let i=0;i<a.length-10;i++){if(a[i]===47&&decode(a,i,10)==="/ByteRange"){hasByteRange=true;break;}}
- if(sigFields||hasByteRange)throw Error("Potential digital signature: refusing to invalidate the signed document");
+ const safety=typeof FileMetaPDF!=="undefined"?FileMetaPDF:(typeof require==="function"?require("./pdf-tools.js"):null);
+ if(!safety)throw Error("Shared PDF safety checks unavailable");
+ safety.guard(doc,a,pdfLib);
  if(!count)return {format:"pdf",count:0,removed:[],bytes:a,notes};
  doc.context.trailerInfo.Info=undefined;
  doc.catalog.delete(pdfLib.PDFName.of("Metadata"));
