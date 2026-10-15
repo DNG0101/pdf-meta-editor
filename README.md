@@ -137,3 +137,19 @@ Node.js 22+ commands: npm install; npm run verify.
 Verification includes byte-by-byte preservation and tampering cases across JPEG/PNG/WebP/MP3/WAV/GIF/FLAC, PDF structural cases, Office archive entry comparisons and JPEG multiscan/PNG compressed-text cases, as well as JPEG/PNG/WebP/MP3/WAV/GIF/FLAC byte-structure fixtures, PDF and Office reinspection, malicious ZIP resource bounds, field extraction/cleaning round trips, display-orientation refusal and a browser DOM test asserting that metadata values display safely. Test success is not universal compatibility certification.
 
 Each new file format must be implemented with a real parser, a format-specific cleaner, and a post-clean validation step. Never blindly replace byte sequences in arbitrary files.
+
+## v0.8.0 — verified PDF edits and diagnostics
+
+- Both PDF mutation paths apply the shared signature/encryption guard. No-change advanced downloads retain the original bytes.
+- Core Info fields support deletion using an empty value. Dates require explicit UTC ISO timestamps (`2026-10-15T12:30:00Z`) and reject invalid dates.
+- Custom Info JSON edits string fields; `null` deletes the named key. Omitted keys remain unchanged. Standard fields must be edited with their dedicated controls. Other custom PDF object types remain untouched.
+- Export rereads every changed Info entry and compares the retained PDF catalog graph and SHA-256 hashes of its streams. Cleanup excludes Metadata references from this comparison. This is not a rendered-page or cryptographic validation guarantee.
+- Existing XMP is retained during Info edits and may disagree with edited Info fields. Universal cleanup removes only its documented Info/catalog-XMP targets, not all nested metadata.
+- ExifTool runs in a worker where supported. Cancel terminates that worker; a 120-second scan limit bounds it. WASM fetches have a 20-second timeout per provider. Built-in parsers still finish their current file before cancellation.
+- Optional output ExifTool scans run before cleaned bytes are downloaded. They are reported separately from original-file scans; a scan failure withholds that file's download.
+- The Diagnostics panel exports a bounded local event log and runtime availability. Advanced PDF analysis export includes original fields, proposed edits and parsed object inventory. Review reports for private data before sharing.
+- `npm ci && npm run verify` runs syntax checks and regression tests. `node tests/exiftool-live-smoke.cjs` checks external WASM delivery and its pinned digest.
+
+### Remaining boundaries
+
+Inspect-only formats have no newly implied write support. No generic all-file sanitizer, SynthID detector, cryptographic signature validator, full PDF compliance validator, or guaranteed metadata-free certification is provided. External library/CDN availability is still required. The batch and per-file memory limits remain in force; hashing outside PDF graph verification is still skipped above 32 MiB. Unimplemented analysis fields are shown as not assessed/unavailable.

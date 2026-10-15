@@ -174,7 +174,10 @@ async function pdf(a,b,pdfLib){
   if(x.getWidth()!==y.getWidth()||x.getHeight()!==y.getHeight()||x.getRotation().angle!==y.getRotation().angle)
    throw Error("PDF page geometry changed at page "+(i+1));
  }
- return {level:"structural-only",checks:["PDF page count, dimensions and rotation preserved"],warnings:["PDF page rendering, text, attachments and graphical fidelity were not independently verified."]};
+ const safety=typeof FileMetaPDF!=="undefined"?FileMetaPDF:(typeof require==="function"?require("./pdf-tools.js"):null);
+ if(!safety)throw Error("PDF graph verifier unavailable");
+ if(await safety.snapshot(oldDoc,pdfLib)!==await safety.snapshot(newDoc,pdfLib))throw Error("PDF retained catalog/content graph changed");
+ return {level:"object-graph-and-streams",checks:["Page geometry and retained catalog graph including stream bytes matched"],warnings:["Metadata references excluded; visual rendering and cryptographic validation not performed."]};
 }
 async function verify(before,after,format,{zipLib,pdfLib}={}){
  if(!(before instanceof Uint8Array)||!(after instanceof Uint8Array)||!before.length||!after.length)throw Error("Invalid verifier input");
