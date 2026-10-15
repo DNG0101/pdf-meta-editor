@@ -527,7 +527,7 @@ async function buildSections(file, buf) {
 function renderResults(fileName, sections) {
   document.getElementById("result-filename").textContent = fileName;
   document.getElementById("result-subtitle").textContent =
-    `${sections.length} categories · Only ✦ fields are editable and included in exported PDF`;
+    `${sections.length} categories · Only ✦ fields are editable. Info edits retain existing XMP, which may contain different values. Dates require UTC ISO format.`;
 
   const container = document.getElementById("sections-container");
   container.innerHTML = "";
